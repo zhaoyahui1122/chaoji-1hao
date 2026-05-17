@@ -4,8 +4,9 @@ from datetime import datetime
 import json
 from typing import Any
 
-from app.core.state import PAPER_BROKER
-from app.services.market_data import get_ohlcv
+from app.core.log_config import get_logger
+from app.core.state import PAPER_BROKER, get_broker
+from app.services.market_data import get_ohlcv, MarketDataUnavailableError
 from app.services.runner_log_store import append_log, load_logs
 from app.services.runner_risk_controls import evaluate_runner_guards
 from app.services.runner_state_store import load_runner_state, save_runner_state
@@ -13,6 +14,8 @@ from app.services.risk import build_risk_sized_order, calc_stop_loss_price, calc
 from app.services.strategy_store import load_strategy_config
 from app.strategy.boll_rsi_ma import compute_indicators as classic_compute_indicators, generate_signal as classic_generate_signal
 from app.strategy.turtle import prepare_signals as turtle_prepare_signals
+
+logger = get_logger(__name__)
 
 
 def _run_classic_signal(config: dict[str, Any], df, last_row) -> tuple[str | None, dict[str, Any] | None]:
@@ -84,27 +87,33 @@ def _should_block_reverse_signal(config: dict[str, Any], existing, signal: str |
 
 
 
-def _extract_position_targets(existing, stop_loss_pct: float, take_profit_pct: float) -> tuple[float, float]:
-    stop_loss_price = None
-    take_profit_price = None
-    open_order = next((order for order in reversed(PAPER_BROKER.orders) if order.position_id == existing.position_id and order.event_type == "open"), None)
+def _extract_position_targets(existing, stop_loss_pct: float, take_profit_pct: float, broker=None) -> tuple[float, float]:
+    """Extract SL/TP prices. Priority: position field > order meta > recalculate."""
+    # 1) Read directly from position (set at open time)
+    pos_sl = getattr(existing, "stop_loss_price", None)
+    pos_tp = getattr(existing, "take_profit_price", None)
+    if pos_sl and pos_tp and pos_sl > 0 and pos_tp > 0:
+        return float(pos_sl), float(pos_tp)
+
+    # 2) Fallback: scan order meta
+    if broker is None:
+        broker = PAPER_BROKER
+    open_order = next((order for order in reversed(broker.orders) if order.position_id == existing.position_id and order.event_type == "open"), None)
     if open_order and open_order.meta_json:
         try:
             open_meta = json.loads(open_order.meta_json)
-            raw_stop_loss = open_meta.get("stop_loss_price")
-            raw_take_profit = open_meta.get("take_profit_price")
-            if raw_stop_loss is not None:
-                stop_loss_price = float(raw_stop_loss)
-            if raw_take_profit is not None:
-                take_profit_price = float(raw_take_profit)
+            raw_sl = open_meta.get("stop_loss_price")
+            raw_tp = open_meta.get("take_profit_price")
+            if raw_sl is not None and raw_tp is not None:
+                return float(raw_sl), float(raw_tp)
         except (TypeError, ValueError, json.JSONDecodeError):
-            stop_loss_price = None
-            take_profit_price = None
-    if stop_loss_price is None:
-        stop_loss_price = calc_stop_loss_price(existing.entry_price, existing.side, stop_loss_pct)
-    if take_profit_price is None:
-        take_profit_price = calc_take_profit_price(existing.entry_price, existing.side, take_profit_pct)
-    return stop_loss_price, take_profit_price
+            pass
+
+    # 3) Last resort: recalculate from current pct config
+    return (
+        calc_stop_loss_price(existing.entry_price, existing.side, stop_loss_pct),
+        calc_take_profit_price(existing.entry_price, existing.side, take_profit_pct),
+    )
 
 
 def _resolve_exit_trigger(existing, stop_loss_price: float, take_profit_price: float, candle_high: float, candle_low: float) -> tuple[str | None, float | None]:
@@ -135,8 +144,11 @@ def _close_position_from_trigger(
     market_meta: dict[str, Any],
     candle_high: float,
     candle_low: float,
+    broker: Any = None,
 ) -> dict[str, Any]:
-    result = PAPER_BROKER.close_position(
+    if broker is None:
+        broker = PAPER_BROKER
+    result = broker.close_position(
         symbol,
         trigger_price,
         source="runner",
@@ -152,6 +164,7 @@ def _close_position_from_trigger(
             "trigger_basis": "candle_range",
         },
     )
+    logger.info("[%s] close %s @ %s (reason=%s, pnl=%.2f)", symbol, existing.side, trigger_price, close_reason, result.get("pnl", 0))
     return {
         "ok": True,
         "symbol": symbol,
@@ -192,6 +205,7 @@ def run_strategy_cycle(config: dict[str, Any]) -> dict[str, Any]:
         save_runner_state(state)
 
     if not guard["allowed"]:
+        logger.warning("Runner halted: %s", guard["halt_reason"])
         payload = {"ok": False, "action": "halted", "reason": guard["halt_reason"], "guard": guard}
         append_log({"ts": datetime.utcnow().isoformat(), "config": config, "result": payload})
         save_runner_state({
@@ -220,6 +234,8 @@ def run_strategy_cycle(config: dict[str, Any]) -> dict[str, Any]:
     fee_rate = float(config.get("fee_rate", 0.00015))
     slippage_rate = float(config.get("slippage_rate", 0.0001))
     strategy_type = config.get("strategy_type", "classic")
+    trade_mode = config.get("trade_mode", "paper")
+    broker = get_broker(trade_mode)
 
     save_runner_state({
         **state,
@@ -249,6 +265,7 @@ def run_strategy_cycle(config: dict[str, Any]) -> dict[str, Any]:
                 fee_rate=fee_rate,
                 slippage_rate=slippage_rate,
                 strategy_type=strategy_type,
+                broker=broker,
             )
             per_symbol_results.append(result)
 
@@ -268,6 +285,7 @@ def run_strategy_cycle(config: dict[str, Any]) -> dict[str, Any]:
         return _save_and_return(config, payload)
 
     except Exception as exc:
+        logger.error("Runner cycle error: %s", exc, exc_info=True)
         payload = {"ok": False, "action": "error", "reason": str(exc)}
         append_log({"ts": datetime.utcnow().isoformat(), "config": config, "result": payload})
         save_runner_state({
@@ -296,8 +314,22 @@ def _run_single_symbol_cycle(
     fee_rate: float,
     slippage_rate: float,
     strategy_type: str,
+    broker: Any = None,
 ) -> dict[str, Any]:
-    df, market_meta = get_ohlcv(symbol, timeframe, source=data_source)
+    if broker is None:
+        broker = PAPER_BROKER
+    try:
+        df, market_meta = get_ohlcv(symbol, timeframe, source=data_source)
+    except MarketDataUnavailableError as exc:
+        logger.warning("[%s] Market data unavailable: %s", symbol, exc)
+        return {
+            "ok": True,
+            "symbol": symbol,
+            "action": "skip_data_unavailable",
+            "reason": str(exc),
+            "guard": guard,
+            "market_data": {"requested_source": data_source, "actual_source": "unavailable"},
+        }
     if df.empty:
         return {"ok": False, "symbol": symbol, "reason": "no_market_data", "market_data": market_meta}
 
@@ -311,38 +343,7 @@ def _run_single_symbol_cycle(
     else:
         signal, extra_meta = _run_classic_signal(config, df, last_row)
 
-    existing = next((p for p in PAPER_BROKER.positions if p.symbol == symbol), None)
-    market_fallback_used = (
-        str(data_source) == "gate"
-        and (
-            bool(market_meta.get("fallback_used"))
-            or str(market_meta.get("actual_source") or "") != "gate"
-        )
-    )
-
-    if market_fallback_used and existing is not None:
-        return {
-            "ok": True,
-            "symbol": symbol,
-            "action": "skip_fallback_market",
-            "reason": "market_data_fallback_with_open_position",
-            "signal": signal,
-            "price": price,
-            "guard": guard,
-            "market_data": market_meta,
-        }
-
-    if market_fallback_used and existing is None:
-        return {
-            "ok": True,
-            "symbol": symbol,
-            "action": "skip_fallback_entry",
-            "reason": "market_data_fallback_new_entry_blocked",
-            "signal": signal,
-            "price": price,
-            "guard": guard,
-            "market_data": market_meta,
-        }
+    existing = next((p for p in broker.positions if p.symbol == symbol), None)
 
     if existing is not None and signal in ("long", "short") and existing.side != signal:
         if _should_block_reverse_signal(config, existing, signal, price):
@@ -363,7 +364,7 @@ def _run_single_symbol_cycle(
                     "threshold": threshold,
                 },
             }
-        PAPER_BROKER.close_position(
+        broker.close_position(
             symbol, price, source="runner",
             meta={"runner": True, "strategy_type": strategy_type, "close_reason": "reverse_signal", "signal": signal},
         )
@@ -373,7 +374,7 @@ def _run_single_symbol_cycle(
         turtle_sig = (extra_meta or {}).get("turtle_signal")
         should_exit = (existing.side == "long" and turtle_sig == "exit_long") or (existing.side == "short" and turtle_sig == "exit_short")
         if should_exit:
-            result = PAPER_BROKER.close_position(
+            result = broker.close_position(
                 symbol, price, source="runner",
                 meta={"runner": True, "strategy_type": strategy_type, "close_reason": "turtle_exit", "turtle_signal": turtle_sig},
             )
@@ -392,7 +393,7 @@ def _run_single_symbol_cycle(
                 sl_price = price + 2 * atr
                 tp_price = price - 3 * atr
             sizing = build_risk_sized_order(
-                side=signal, account_equity=PAPER_BROKER.equity, entry_price=price,
+                side=signal, account_equity=broker.equity, entry_price=price,
                 leverage=leverage, risk_per_trade_pct=risk_per_trade_pct,
                 stop_loss_pct=stop_loss_pct, take_profit_pct=take_profit_pct,
                 allocated_margin_cap=allocated_margin,
@@ -401,7 +402,7 @@ def _run_single_symbol_cycle(
             sizing["take_profit_price"] = tp_price
         else:
             sizing = build_risk_sized_order(
-                side=signal, account_equity=PAPER_BROKER.equity, entry_price=price,
+                side=signal, account_equity=broker.equity, entry_price=price,
                 leverage=leverage, risk_per_trade_pct=risk_per_trade_pct,
                 stop_loss_pct=stop_loss_pct, take_profit_pct=take_profit_pct,
                 allocated_margin_cap=allocated_margin,
@@ -409,7 +410,7 @@ def _run_single_symbol_cycle(
 
         effective_allocated_margin = sizing["effective_allocated_margin"]
         explicit_qty = sizing["qty"]
-        result = PAPER_BROKER.place_order(
+        result = broker.place_order(
             symbol=symbol, side=signal, price=price, leverage=leverage,
             allocated_margin=effective_allocated_margin,
             stop_loss_price=sizing["stop_loss_price"], source="runner",
@@ -427,6 +428,7 @@ def _run_single_symbol_cycle(
             qty=explicit_qty if explicit_qty > 0 else None,
         )
         action = "open" if result.get("ok") else "rejected"
+        logger.info("[%s] %s %s @ %s (margin=%.0f, sl=%.1f)", symbol, action, signal, price, effective_allocated_margin, sizing["stop_loss_price"])
         return {
             "ok": True, "symbol": symbol, "action": action, "signal": signal, "price": price,
             "result": result, "guard": guard, "market_data": market_meta,
@@ -439,12 +441,12 @@ def _run_single_symbol_cycle(
         }
 
     if existing is not None:
-        mark_result = PAPER_BROKER.update_mark_price(
+        mark_result = broker.update_mark_price(
             symbol, price, source="runner",
             meta={"runner": True, "strategy_type": strategy_type, "signal": signal, "mark_price": price},
             persist=False,
         )
-        stop_loss_price, take_profit_price = _extract_position_targets(existing, stop_loss_pct, take_profit_pct)
+        stop_loss_price, take_profit_price = _extract_position_targets(existing, stop_loss_pct, take_profit_pct, broker=broker)
         close_reason, trigger_price = _resolve_exit_trigger(existing, stop_loss_price, take_profit_price, candle_high, candle_low)
 
         if close_reason and trigger_price is not None:
@@ -461,6 +463,7 @@ def _run_single_symbol_cycle(
                 market_meta=market_meta,
                 candle_high=candle_high,
                 candle_low=candle_low,
+                broker=broker,
             )
 
         return {

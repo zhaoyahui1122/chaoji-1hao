@@ -7,9 +7,8 @@ services:
       - "8000:8000"
     volumes:
       - ./apps/api:/app
+      - ./state:/app/state
     working_dir: /app
-    depends_on:
-      - db
   web:
     build: ./apps/web
     command: npm run dev
@@ -20,11 +19,3 @@ services:
     working_dir: /app
     depends_on:
       - api
-  db:
-    image: postgres:16
-    environment:
-      POSTGRES_USER: quant
-      POSTGRES_PASSWORD: quant
-      POSTGRES_DB: quant
-    ports:
-      - "5432:5432"

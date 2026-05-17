@@ -111,6 +111,10 @@ def init_db() -> None:
             conn.execute("ALTER TABLE paper_orders ADD COLUMN source TEXT NOT NULL DEFAULT 'manual'")
         if not _column_exists(conn, "paper_orders", "meta_json"):
             conn.execute("ALTER TABLE paper_orders ADD COLUMN meta_json TEXT")
+        if not _column_exists(conn, "paper_positions", "stop_loss_price"):
+            conn.execute("ALTER TABLE paper_positions ADD COLUMN stop_loss_price REAL NOT NULL DEFAULT 0")
+        if not _column_exists(conn, "paper_positions", "take_profit_price"):
+            conn.execute("ALTER TABLE paper_positions ADD COLUMN take_profit_price REAL NOT NULL DEFAULT 0")
         conn.commit()
 
 

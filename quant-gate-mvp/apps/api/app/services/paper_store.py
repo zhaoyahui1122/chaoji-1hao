@@ -125,7 +125,7 @@ def load_structured_paper_state(default: dict[str, Any]) -> dict[str, Any] | Non
     init_db()
     with get_conn() as conn:
         positions = [dict(row) for row in conn.execute(
-            "SELECT position_id, symbol, side, leverage, qty, entry_price, mark_price, fee_rate, slippage_rate, entry_fee, cumulative_fees, entry_slippage_cost, exit_slippage_cost, cumulative_slippage_cost FROM paper_positions WHERE status = 'open' ORDER BY id ASC"
+            "SELECT position_id, symbol, side, leverage, qty, entry_price, mark_price, fee_rate, slippage_rate, entry_fee, cumulative_fees, entry_slippage_cost, exit_slippage_cost, cumulative_slippage_cost, stop_loss_price, take_profit_price FROM paper_positions WHERE status = 'open' ORDER BY id ASC"
         ).fetchall()]
         latest_snapshot = conn.execute(
             "SELECT initial_balance, realized_pnl FROM paper_account_snapshots ORDER BY id DESC LIMIT 1"
@@ -191,12 +191,14 @@ def replace_structured_paper_state(data: dict[str, Any], account_snapshot: dict[
                 float(p.get("entry_slippage_cost", 0.0)),
                 float(p.get("exit_slippage_cost", 0.0)),
                 float(p.get("cumulative_slippage_cost", p.get("entry_slippage_cost", 0.0))),
+                float(p.get("stop_loss_price", 0.0)),
+                float(p.get("take_profit_price", 0.0)),
             )
             if existing_row_id is None:
                 conn.execute(
                     """
-                    INSERT INTO paper_positions(position_id, symbol, side, leverage, qty, entry_price, mark_price, fee_rate, slippage_rate, entry_fee, cumulative_fees, entry_slippage_cost, exit_slippage_cost, cumulative_slippage_cost, status)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open')
+                    INSERT INTO paper_positions(position_id, symbol, side, leverage, qty, entry_price, mark_price, fee_rate, slippage_rate, entry_fee, cumulative_fees, entry_slippage_cost, exit_slippage_cost, cumulative_slippage_cost, stop_loss_price, take_profit_price, status)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open')
                     """,
                     values,
                 )
@@ -218,6 +220,8 @@ def replace_structured_paper_state(data: dict[str, Any], account_snapshot: dict[
                         entry_slippage_cost = ?,
                         exit_slippage_cost = ?,
                         cumulative_slippage_cost = ?,
+                        stop_loss_price = ?,
+                        take_profit_price = ?,
                         status = 'open',
                         closed_at = NULL,
                         close_price = NULL,
@@ -400,7 +404,7 @@ def get_position_history(
     with get_conn() as conn:
         rows = conn.execute(
             f"""
-            SELECT p.id, p.position_id, p.symbol, p.side, p.leverage, p.qty, p.entry_price, p.mark_price, p.fee_rate, p.slippage_rate, p.entry_fee, p.cumulative_fees, p.entry_slippage_cost, p.exit_slippage_cost, p.cumulative_slippage_cost, p.status, p.opened_at, p.closed_at, p.close_price, p.realized_pnl,
+            SELECT p.id, p.position_id, p.symbol, p.side, p.leverage, p.qty, p.entry_price, p.mark_price, p.fee_rate, p.slippage_rate, p.entry_fee, p.cumulative_fees, p.entry_slippage_cost, p.exit_slippage_cost, p.cumulative_slippage_cost, p.stop_loss_price, p.take_profit_price, p.status, p.opened_at, p.closed_at, p.close_price, p.realized_pnl,
                    (
                        SELECT o.meta_json
                        FROM paper_orders o

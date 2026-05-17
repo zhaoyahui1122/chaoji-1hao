@@ -5,7 +5,7 @@ from app.services.gate_market_data import fetch_gate_futures_candles, fetch_gate
 
 router = APIRouter()
 
-Symbol = Literal["BTC_USDT", "ETH_USDT"]
+Symbol = str
 
 
 @router.get("/ticker/{symbol}")

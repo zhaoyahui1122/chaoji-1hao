@@ -9,7 +9,6 @@ import requests
 
 GATE_FUTURES_CANDLES_URL = "https://api.gateio.ws/api/v4/futures/usdt/candlesticks"
 GATE_FUTURES_TICKERS_URL = "https://api.gateio.ws/api/v4/futures/usdt/tickers"
-SUPPORTED_CONTRACTS = {"BTC_USDT", "ETH_USDT"}
 GATE_RETRY_ATTEMPTS = 3
 GATE_RETRY_DELAY_SECONDS = 1.0
 
@@ -26,10 +25,7 @@ def timeframe_to_gate_interval(timeframe: str) -> str:
 
 
 def symbol_to_gate_contract(symbol: str) -> str:
-    normalized = str(symbol).upper()
-    if normalized in SUPPORTED_CONTRACTS:
-        return normalized
-    return normalized
+    return str(symbol).upper()
 
 
 def _gate_get(url: str, params: dict[str, Any], timeout: float):

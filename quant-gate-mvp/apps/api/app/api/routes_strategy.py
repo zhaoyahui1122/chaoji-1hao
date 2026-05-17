@@ -17,7 +17,7 @@ from app.services.strategy_store import (
 router = APIRouter()
 
 Timeframe = Literal["5m", "15m", "30m", "1h", "4h"]
-Symbol = Literal["BTC_USDT", "ETH_USDT"]
+Symbol = str
 
 
 class StrategyConfig(BaseModel):

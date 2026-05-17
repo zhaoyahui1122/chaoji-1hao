@@ -29,6 +29,8 @@ class PaperPosition:
     entry_slippage_cost: float = 0.0
     exit_slippage_cost: float = 0.0
     cumulative_slippage_cost: float = 0.0
+    stop_loss_price: float = 0.0
+    take_profit_price: float = 0.0
 
 
 @dataclass
@@ -258,6 +260,8 @@ class PaperBroker:
             entry_slippage_cost=entry_slippage_cost,
             exit_slippage_cost=0.0,
             cumulative_slippage_cost=entry_slippage_cost,
+            stop_loss_price=float(stop_loss_price),
+            take_profit_price=float(resolved_take_profit_price) if resolved_take_profit_price else 0.0,
         )
         self.orders.append(order)
         self.positions.append(position)
@@ -393,6 +397,18 @@ class PaperBroker:
                 "fee_rate": p.fee_rate,
                 "slippage_rate": p.slippage_rate,
             }
+            close_order = PaperOrder(
+                position_id=closed.position_id,
+                symbol=closed.symbol,
+                side=closed.side,
+                price=execution_price,
+                qty=closed.qty,
+                status="closed",
+                event_type="close",
+                source=source,
+                meta_json=json.dumps(resolved_meta, ensure_ascii=False),
+            )
+            self.orders.append(close_order)
             append_order_event(
                 symbol=closed.symbol,
                 side=closed.side,

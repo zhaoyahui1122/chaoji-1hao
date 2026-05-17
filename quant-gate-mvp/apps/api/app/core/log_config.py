@@ -1,0 +1,23 @@
+"""Centralized logging configuration."""
+
+from __future__ import annotations
+
+import logging
+import sys
+
+
+def setup_logging(level: str = "INFO") -> None:
+    fmt = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+    datefmt = "%Y-%m-%d %H:%M:%S"
+
+    handler = logging.StreamHandler(sys.stdout)
+    handler.setFormatter(logging.Formatter(fmt, datefmt=datefmt))
+
+    root = logging.getLogger()
+    root.setLevel(getattr(logging, level.upper(), logging.INFO))
+    if not root.handlers:
+        root.addHandler(handler)
+
+
+def get_logger(name: str) -> logging.Logger:
+    return logging.getLogger(name)

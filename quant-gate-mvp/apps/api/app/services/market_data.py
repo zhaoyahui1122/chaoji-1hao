@@ -5,7 +5,14 @@ import math
 
 import pandas as pd
 
+from app.core.log_config import get_logger
 from app.services.gate_market_data import fetch_gate_futures_candles
+
+logger = get_logger(__name__)
+
+
+class MarketDataUnavailableError(Exception):
+    """Raised when real market data cannot be fetched and fallback is not allowed."""
 
 
 TIMEFRAME_MINUTES = {
@@ -50,7 +57,7 @@ def generate_mock_ohlcv(
 ) -> pd.DataFrame:
     step = timeframe_to_minutes(timeframe)
     now = end_time or datetime.now(UTC)
-    base_price = 64000 if symbol == "BTC_USDT" else 3200
+    base_price = 64000 if symbol == "BTC_USDT" else 3200 if symbol == "ETH_USDT" else max(1.0, abs(hash(symbol)) % 1000)
     rows = []
     for i in range(periods):
         ts = now - timedelta(minutes=step * (periods - i))
@@ -81,6 +88,7 @@ def get_ohlcv(
     periods: int = 2000,
     start_time: datetime | None = None,
     end_time: datetime | None = None,
+    allow_fallback: bool = False,
 ) -> tuple[pd.DataFrame, dict]:
     start_ts = int(start_time.timestamp()) if start_time is not None else None
     end_ts = int(end_time.timestamp()) if end_time is not None else None
@@ -119,7 +127,13 @@ def get_ohlcv(
                 return df, meta
             meta["warning"] = "gate_returned_empty_dataframe"
         except Exception as exc:
+            logger.warning("Gate data fetch failed for %s: %s", symbol, exc)
             meta["warning"] = f"gate_fetch_failed: {exc}"
+
+        if not allow_fallback:
+            raise MarketDataUnavailableError(
+                f"gate data unavailable: {meta['warning']} — fallback blocked"
+            )
 
     mock_periods = periods
     if start_ts is not None and end_ts is not None:

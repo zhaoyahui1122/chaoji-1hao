@@ -5,13 +5,14 @@ from typing import Any, Literal
 
 from app.backtest.engine import SimpleBacktester
 from app.core.settings import SETTINGS
-from app.services.market_data import get_ohlcv, timeframe_to_minutes
+from app.services.market_data import get_ohlcv, timeframe_to_minutes, MarketDataUnavailableError
 from app.services.risk import leverage_risk_check
+from fastapi import HTTPException
 
 router = APIRouter()
 
 Timeframe = Literal["5m", "15m", "30m", "1h", "4h"]
-Symbol = Literal["BTC_USDT", "ETH_USDT"]
+Symbol = str
 DataSource = Literal["mock", "gate"]
 StrategyType = Literal["classic", "turtle"]
 
@@ -119,14 +120,17 @@ def run_backtest(payload: BacktestRequest):
     end_time = datetime.now(UTC)
     start_time = end_time - timedelta(days=payload.backtest_days)
 
-    data, market_data = get_ohlcv(
-        payload.symbol,
-        payload.timeframe,
-        source=payload.data_source,
-        periods=periods,
-        start_time=start_time,
-        end_time=end_time,
-    )
+    try:
+        data, market_data = get_ohlcv(
+            payload.symbol,
+            payload.timeframe,
+            source=payload.data_source,
+            periods=periods,
+            start_time=start_time,
+            end_time=end_time,
+        )
+    except MarketDataUnavailableError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
     engine = SimpleBacktester(initial_balance=payload.initial_balance)
     result = engine.run(data, payload.model_dump())
 

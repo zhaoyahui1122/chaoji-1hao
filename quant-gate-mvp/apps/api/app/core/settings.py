@@ -2,7 +2,7 @@ from pydantic import BaseModel, Field
 from typing import Literal
 
 Timeframe = Literal["5m", "15m", "30m", "1h", "4h"]
-Symbol = Literal["BTC_USDT", "ETH_USDT"]
+Symbol = str
 
 
 class AppSettings(BaseModel):

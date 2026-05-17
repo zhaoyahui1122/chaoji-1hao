@@ -6,21 +6,51 @@ import AccountOverviewSection from '../components/AccountOverviewSection'
 import BacktestRiskCard from '../components/BacktestRiskCard'
 import BacktestSummaryCard from '../components/BacktestSummaryCard'
 import BacktestTradesCard from '../components/BacktestTradesCard'
+import { HeroMiniStat, MetricCard, SectionHeader } from '../components/DashboardShell'
 import EquityCurveCard from '../components/EquityCurveCard'
-import HistoryFilterCard from '../components/HistoryFilterCard'
 import HistoryOverviewSection from '../components/HistoryOverviewSection'
-import HistoryStatsCard from '../components/HistoryStatsCard'
 import LiveAccountShell from '../components/LiveAccountShell'
-import OrderHistoryCard from '../components/OrderHistoryCard'
 import PaperTradePanel from '../components/PaperTradePanel'
 import PositionHistoryCard from '../components/PositionHistoryCard'
 import PositionsOverviewCard from '../components/PositionsOverviewCard'
 import RunnerControlCard from '../components/RunnerControlCard'
 import RunnerGuardCard from '../components/RunnerGuardCard'
-import RunnerLogsCard from '../components/RunnerLogsCard'
 import RunnerStatusCard from '../components/RunnerStatusCard'
 import SupportScopeCard from '../components/SupportScopeCard'
 import { chipStyle } from '../components/dashboard-types'
+import {
+  bannerStatGridStyle,
+  bannerTextStyle,
+  bannerTitleStyle,
+  brandBadgeStyle,
+  brandSubtleStyle,
+  brandTitleStyle,
+  brandWrapStyle,
+  contentStyle,
+  darkPanelStyle,
+  eyebrowStyle,
+  heroDescriptionStyle,
+  heroPillStyle,
+  heroRightGridStyle,
+  heroStyle,
+  heroTitleStyle,
+  navButtonStyle,
+  navDescStyle,
+  navEyebrowStyle,
+  navLabelStyle,
+  navListStyle,
+  navSectionStyle,
+  navSectionTitleStyle,
+  plainStateStyle,
+  sectionStackStyle,
+  shellGridStyle,
+  shellStyle,
+  sidebarStatStackStyle,
+  sidebarStyle,
+  strategyBannerStyle,
+  twoColBalancedStyle,
+  twoColWideStyle,
+} from '../components/dashboard-layout-styles'
 import { buildLiveAccountOverview } from '../components/dashboard-utils'
 import { useDashboardPageData } from '../components/useDashboardPageData'
 import { getLiveAccountStatus, type LiveAccountStatus } from '../lib/api'
@@ -30,10 +60,7 @@ type WindowKey =
   | 'positions'
   | 'strategy'
   | 'paper'
-  | 'filters'
-  | 'historyStats'
   | 'equity'
-  | 'orders'
   | 'positionsHistory'
 
 type TradeMode = 'paper' | 'live'
@@ -43,10 +70,7 @@ const WINDOW_OPTIONS: Array<{ key: WindowKey; label: string; description: string
   { key: 'positions', label: '持仓总览', description: '当前账户、仓位、风险暴露与市场参考', eyebrow: 'Overview' },
   { key: 'strategy', label: '策略控制台', description: '策略参数、回测、Runner 与风控总控', eyebrow: 'Strategy' },
   { key: 'paper', label: '交易', description: '实盘账户连接与纸面仓位模拟交易', eyebrow: 'Trade' },
-  { key: 'filters', label: '历史筛选', description: '订单与持仓历史筛选条件', eyebrow: 'Filters' },
-  { key: 'historyStats', label: '历史统计', description: '收益、成本、胜率等关键统计', eyebrow: 'Stats' },
   { key: 'equity', label: '权益曲线', description: '账户权益变化与回撤观察', eyebrow: 'Equity' },
-  { key: 'orders', label: '订单与日志', description: '历史订单与 Runner 日志窗口', eyebrow: 'Orders' },
   { key: 'positionsHistory', label: '持仓历史', description: '已结束持仓结果与执行摘要', eyebrow: 'History' },
 ]
 
@@ -56,13 +80,9 @@ export default function HomePage() {
     strategy,
     backtest,
     runnerResult,
-    runnerLogs,
     equityCurve,
-    orderHistory,
     positionHistory,
     historyStats,
-    historyFilters,
-    setHistoryFilters,
     marketTickers,
     strategyPriceReference,
     strategyPresets,
@@ -159,7 +179,6 @@ export default function HomePage() {
   const activeWindowMeta = WINDOW_OPTIONS.find((item) => item.key === activeWindow) || WINDOW_OPTIONS[0]
   const selectedStrategyPreset = strategyPresets.find((item) => item.slotId === selectedStrategySlotId) || null
   const strategyType = selectedStrategyPreset?.config.strategy_type || strategy.strategy_type
-  const latestRunnerAction = latestRunnerLog?.result?.action || latestRunnerLog?.result?.reason || '-'
   const overviewRiskConfig = {
     stopLossPct: selectedStrategyPreset?.config.stop_loss_pct ?? strategy.stop_loss_pct,
     takeProfitPct: selectedStrategyPreset?.config.take_profit_pct ?? strategy.take_profit_pct,
@@ -428,58 +447,10 @@ export default function HomePage() {
               </div>
             )}
 
-            {activeWindow === 'filters' && (
-              <div style={darkPanelStyle}>
-                <SectionHeader title="历史筛选器" hint="限定时间、状态与查看范围。" />
-                <HistoryFilterCard historyFilters={historyFilters} setHistoryFilters={setHistoryFilters} />
-              </div>
-            )}
-
-            {activeWindow === 'historyStats' && (
-              <div style={darkPanelStyle}>
-                <SectionHeader title="历史统计面板" hint="收益、成本、命中率等统计汇总。" />
-                <HistoryStatsCard historyStats={historyStats} />
-              </div>
-            )}
-
             {activeWindow === 'equity' && (
               <div style={darkPanelStyle}>
                 <SectionHeader title="权益曲线" hint="观察曲线、回撤与阶段表现。" />
                 <EquityCurveCard equityCurve={equityCurve} />
-              </div>
-            )}
-
-            {activeWindow === 'orders' && (
-              <div style={{ display: 'grid', gap: 16 }}>
-                <div style={strategyBannerStyle}>
-                  <div>
-                    <div style={eyebrowStyle}>Execution Replay</div>
-                    <h3 style={bannerTitleStyle}>订单与 Runner 工作台</h3>
-                    <p style={bannerTextStyle}>把最新成交、执行决策与完整时间线放进同一视图，减少订单复盘时的来回切换。</p>
-                  </div>
-                  <div style={bannerStatGridStyle}>
-                    <HeroMiniStat label="Orders" value={`${orderHistory.length}`} />
-                    <HeroMiniStat label="Logs" value={`${runnerLogs.length}`} />
-                    <HeroMiniStat label="Latest Event" value={orderHistory[0]?.event_type || '-'} />
-                    <HeroMiniStat label="Latest Action" value={latestRunnerAction} />
-                  </div>
-                </div>
-
-                <div style={twoColWideStyle}>
-                  <div style={{ display: 'grid', gap: 16 }}>
-                    <div style={darkPanelStyle}>
-                      <SectionHeader title="订单回放" hint="以订单事件链为主视角查看开仓、盯市和平仓。" />
-                      <OrderHistoryCard orderHistory={orderHistory} historyFilters={historyFilters} />
-                    </div>
-                  </div>
-
-                  <div style={{ display: 'grid', gap: 16 }}>
-                    <div style={darkPanelStyle}>
-                      <SectionHeader title="策略执行日志" hint="从 Runner 决策、信号与事件写入结果追踪执行脉络。" />
-                      <RunnerLogsCard runnerLogs={runnerLogs} />
-                    </div>
-                  </div>
-                </div>
               </div>
             )}
 
@@ -496,343 +467,4 @@ export default function HomePage() {
       </div>
     </main>
   )
-}
-
-function MetricCard({ label, value, tone }: { label: string; value: string; tone: 'cyan' | 'blue' | 'green' | 'violet' | 'slate' }) {
-  const toneMap: Record<typeof tone, { border: string; glow: string; value: string }> = {
-    cyan: { border: 'rgba(34,211,238,0.28)', glow: 'rgba(8,145,178,0.18)', value: '#a5f3fc' },
-    blue: { border: 'rgba(59,130,246,0.24)', glow: 'rgba(37,99,235,0.16)', value: '#bfdbfe' },
-    green: { border: 'rgba(16,185,129,0.24)', glow: 'rgba(5,150,105,0.16)', value: '#a7f3d0' },
-    violet: { border: 'rgba(168,85,247,0.24)', glow: 'rgba(126,34,206,0.16)', value: '#e9d5ff' },
-    slate: { border: 'rgba(148,163,184,0.2)', glow: 'rgba(51,65,85,0.18)', value: '#e2e8f0' },
-  }
-  const palette = toneMap[tone]
-  return (
-    <div style={{ ...sidebarMetricCardStyle, border: `1px solid ${palette.border}`, boxShadow: `inset 0 0 0 1px rgba(255,255,255,0.02), 0 14px 28px ${palette.glow}` }}>
-      <div style={sidebarMetricLabelStyle}>{label}</div>
-      <div style={{ ...sidebarMetricValueStyle, color: palette.value }}>{value}</div>
-    </div>
-  )
-}
-
-function HeroMiniStat({ label, value }: { label: string; value: string }) {
-  return (
-    <div style={heroMiniStatStyle}>
-      <div style={heroMiniLabelStyle}>{label}</div>
-      <div style={heroMiniValueStyle}>{value}</div>
-    </div>
-  )
-}
-
-function SectionHeader({ title, hint }: { title: string; hint: string }) {
-  return (
-    <div style={{ marginBottom: 14 }}>
-      <div style={eyebrowStyle}>Workspace Panel</div>
-      <h3 style={sectionTitleStyle}>{title}</h3>
-      <p style={sectionHintStyle}>{hint}</p>
-    </div>
-  )
-}
-
-const plainStateStyle: React.CSSProperties = {
-  minHeight: '100vh',
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  padding: 24,
-  background: '#020617',
-  color: '#e2e8f0',
-  fontFamily: 'Inter, Arial, sans-serif',
-}
-
-const shellStyle: React.CSSProperties = {
-  minHeight: '100vh',
-  background: 'radial-gradient(circle at top left, rgba(14,165,233,0.16) 0%, rgba(2,6,23,0.95) 28%, #020617 62%, #020617 100%)',
-  color: '#e2e8f0',
-  fontFamily: 'Inter, Arial, sans-serif',
-}
-
-const shellGridStyle: React.CSSProperties = {
-  display: 'grid',
-  gridTemplateColumns: '300px minmax(0, 1fr)',
-  gridTemplateRows: '1fr',
-  gap: 20,
-  padding: 20,
-  height: '100vh',
-  overflow: 'hidden',
-}
-
-const sidebarStyle: React.CSSProperties = {
-  position: 'sticky',
-  top: 20,
-  display: 'grid',
-  gap: 18,
-  padding: 18,
-  borderRadius: 28,
-  background: 'linear-gradient(180deg, rgba(15,23,42,0.94) 0%, rgba(2,6,23,0.98) 100%)',
-  border: '1px solid rgba(51,65,85,0.9)',
-  boxShadow: '0 28px 60px rgba(2,8,23,0.45)',
-  maxHeight: 'calc(100vh - 40px)',
-  overflowY: 'auto',
-}
-
-const brandWrapStyle: React.CSSProperties = {
-  display: 'grid',
-  gridTemplateColumns: '56px 1fr',
-  gap: 14,
-  alignItems: 'start',
-}
-
-const brandBadgeStyle: React.CSSProperties = {
-  width: 56,
-  height: 56,
-  borderRadius: 18,
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  fontWeight: 900,
-  letterSpacing: '0.08em',
-  color: '#dbeafe',
-  background: 'linear-gradient(135deg, #0ea5e9 0%, #1d4ed8 100%)',
-  boxShadow: '0 18px 36px rgba(37,99,235,0.35)',
-}
-
-const brandTitleStyle: React.CSSProperties = {
-  margin: '4px 0 0',
-  fontSize: 24,
-  color: '#f8fafc',
-}
-
-const brandSubtleStyle: React.CSSProperties = {
-  margin: '8px 0 0',
-  fontSize: 13,
-  lineHeight: 1.65,
-  color: '#94a3b8',
-}
-
-const eyebrowStyle: React.CSSProperties = {
-  fontSize: 11,
-  letterSpacing: '0.12em',
-  textTransform: 'uppercase',
-  color: '#38bdf8',
-}
-
-const sidebarStatStackStyle: React.CSSProperties = {
-  display: 'grid',
-  gap: 10,
-}
-
-const sidebarMetricCardStyle: React.CSSProperties = {
-  display: 'grid',
-  gap: 6,
-  padding: '14px 16px',
-  borderRadius: 18,
-  background: 'rgba(15,23,42,0.88)',
-}
-
-const sidebarMetricLabelStyle: React.CSSProperties = {
-  fontSize: 11,
-  letterSpacing: '0.08em',
-  textTransform: 'uppercase',
-  color: '#94a3b8',
-}
-
-const sidebarMetricValueStyle: React.CSSProperties = {
-  fontSize: 19,
-  fontWeight: 800,
-}
-
-const navSectionStyle: React.CSSProperties = {
-  display: 'grid',
-  gap: 10,
-}
-
-const navSectionTitleStyle: React.CSSProperties = {
-  fontSize: 12,
-  fontWeight: 800,
-  color: '#cbd5e1',
-  letterSpacing: '0.08em',
-  textTransform: 'uppercase',
-}
-
-const navListStyle: React.CSSProperties = {
-  display: 'grid',
-  gap: 10,
-}
-
-const navButtonStyle: React.CSSProperties = {
-  display: 'grid',
-  gap: 6,
-  padding: '14px 14px 13px',
-  borderRadius: 18,
-  textAlign: 'left',
-  cursor: 'pointer',
-  transition: 'all 0.2s ease',
-  color: '#e2e8f0',
-}
-
-const navEyebrowStyle: React.CSSProperties = {
-  fontSize: 11,
-  color: '#38bdf8',
-  letterSpacing: '0.08em',
-  textTransform: 'uppercase',
-}
-
-const navLabelStyle: React.CSSProperties = {
-  fontSize: 15,
-  fontWeight: 800,
-  color: '#f8fafc',
-}
-
-const navDescStyle: React.CSSProperties = {
-  fontSize: 12,
-  lineHeight: 1.6,
-  color: '#94a3b8',
-}
-
-const contentStyle: React.CSSProperties = {
-  display: 'grid',
-  gap: 18,
-  overflowY: 'auto',
-  maxHeight: '100vh',
-  paddingBottom: 20,
-}
-
-const heroStyle: React.CSSProperties = {
-  display: 'grid',
-  gridTemplateColumns: 'minmax(0, 1.2fr) minmax(320px, 0.9fr)',
-  gap: 18,
-  padding: 24,
-  borderRadius: 30,
-  background: 'linear-gradient(135deg, rgba(15,23,42,0.92) 0%, rgba(15,23,42,0.95) 35%, rgba(30,41,59,0.95) 100%)',
-  border: '1px solid rgba(51,65,85,0.8)',
-  boxShadow: '0 28px 80px rgba(2,8,23,0.42)',
-}
-
-const heroPillStyle: React.CSSProperties = {
-  display: 'inline-flex',
-  alignItems: 'center',
-  gap: 8,
-  padding: '6px 10px',
-  borderRadius: 999,
-  fontSize: 12,
-  fontWeight: 800,
-  color: '#bae6fd',
-  background: 'rgba(14,165,233,0.14)',
-  border: '1px solid rgba(14,165,233,0.18)',
-}
-
-const heroTitleStyle: React.CSSProperties = {
-  margin: '14px 0 0',
-  fontSize: 34,
-  lineHeight: 1.05,
-  color: '#f8fafc',
-  letterSpacing: '-0.03em',
-}
-
-const heroDescriptionStyle: React.CSSProperties = {
-  margin: '12px 0 0',
-  fontSize: 15,
-  lineHeight: 1.7,
-  color: '#94a3b8',
-  maxWidth: 760,
-}
-
-const heroRightGridStyle: React.CSSProperties = {
-  display: 'grid',
-  gridTemplateColumns: '1fr 1fr',
-  gap: 12,
-  alignSelf: 'stretch',
-}
-
-const heroMiniStatStyle: React.CSSProperties = {
-  display: 'grid',
-  gap: 6,
-  padding: '14px 16px',
-  borderRadius: 20,
-  background: 'linear-gradient(180deg, rgba(15,23,42,0.95) 0%, rgba(30,41,59,0.92) 100%)',
-  border: '1px solid rgba(71,85,105,0.55)',
-}
-
-const heroMiniLabelStyle: React.CSSProperties = {
-  fontSize: 11,
-  textTransform: 'uppercase',
-  letterSpacing: '0.08em',
-  color: '#94a3b8',
-}
-
-const heroMiniValueStyle: React.CSSProperties = {
-  fontSize: 22,
-  fontWeight: 800,
-  color: '#f8fafc',
-}
-
-const sectionStackStyle: React.CSSProperties = {
-  display: 'grid',
-  gap: 16,
-}
-
-const darkPanelStyle: React.CSSProperties = {
-  padding: 18,
-  borderRadius: 24,
-  background: 'linear-gradient(180deg, rgba(15,23,42,0.88) 0%, rgba(2,6,23,0.92) 100%)',
-  border: '1px solid rgba(51,65,85,0.72)',
-  boxShadow: '0 18px 44px rgba(2,8,23,0.28)',
-}
-
-const sectionTitleStyle: React.CSSProperties = {
-  margin: '6px 0 0',
-  fontSize: 22,
-  color: '#f8fafc',
-}
-
-const sectionHintStyle: React.CSSProperties = {
-  margin: '8px 0 0',
-  fontSize: 13,
-  lineHeight: 1.6,
-  color: '#94a3b8',
-}
-
-const strategyBannerStyle: React.CSSProperties = {
-  display: 'grid',
-  gridTemplateColumns: 'minmax(0, 1.15fr) minmax(320px, 0.85fr)',
-  gap: 18,
-  padding: 20,
-  borderRadius: 26,
-  background: 'linear-gradient(135deg, rgba(30,41,59,0.98) 0%, rgba(30,64,175,0.85) 48%, rgba(15,118,110,0.82) 100%)',
-  border: '1px solid rgba(125,211,252,0.16)',
-}
-
-const bannerTitleStyle: React.CSSProperties = {
-  margin: '6px 0 0',
-  fontSize: 28,
-  color: '#f8fafc',
-  letterSpacing: '-0.03em',
-}
-
-const bannerTextStyle: React.CSSProperties = {
-  margin: '10px 0 0',
-  fontSize: 14,
-  lineHeight: 1.7,
-  color: 'rgba(226,232,240,0.85)',
-}
-
-const bannerStatGridStyle: React.CSSProperties = {
-  display: 'grid',
-  gridTemplateColumns: '1fr 1fr',
-  gap: 12,
-}
-
-const twoColWideStyle: React.CSSProperties = {
-  display: 'grid',
-  gridTemplateColumns: 'minmax(0, 1.3fr) minmax(320px, 0.9fr)',
-  gap: 16,
-  alignItems: 'start',
-}
-
-const twoColBalancedStyle: React.CSSProperties = {
-  display: 'grid',
-  gridTemplateColumns: '1fr 1fr',
-  gap: 16,
-  alignItems: 'start',
 }

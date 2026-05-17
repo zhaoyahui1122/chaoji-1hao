@@ -8,9 +8,10 @@ from app.core.state import PAPER_BROKER
 router = APIRouter()
 
 Timeframe = Literal["5m", "15m", "30m", "1h", "4h"]
-Symbol = Literal["BTC_USDT", "ETH_USDT"]
+Symbol = str
 DataSource = Literal["mock", "gate"]
 StrategyType = Literal["classic", "turtle"]
+TradeMode = Literal["paper", "live"]
 
 
 class RunnerRequest(BaseModel):
@@ -20,6 +21,7 @@ class RunnerRequest(BaseModel):
     symbols: list[Symbol] | None = None
     timeframe: Timeframe = "15m"
     data_source: DataSource = "gate"
+    trade_mode: TradeMode = "paper"
     leverage: int = Field(default=5, ge=1, le=100)
     allocated_margin: float = Field(default=1000, gt=0)
 

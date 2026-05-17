@@ -7,7 +7,7 @@ from app.services.risk import build_risk_sized_order
 
 router = APIRouter()
 
-Symbol = Literal["BTC_USDT", "ETH_USDT"]
+Symbol = str
 Side = Literal["long", "short"]
 Source = Literal["manual", "runner"]
 

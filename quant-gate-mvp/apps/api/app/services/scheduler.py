@@ -7,7 +7,10 @@ from datetime import datetime, timezone
 from typing import Any
 
 from app.api.routes_strategy import StrategyConfig
+from app.core.log_config import get_logger
 from app.core.state import PAPER_BROKER
+
+logger = get_logger(__name__)
 from app.services.gate_market_data import fetch_gate_futures_ticker
 from app.services.runner_state_store import load_runner_state, save_runner_state
 from app.services.strategy_runner import _extract_position_targets, run_strategy_cycle
@@ -229,6 +232,7 @@ def ensure_scheduler_started() -> None:
     if RUNNER_THREAD and RUNNER_THREAD.is_alive():
         return
     RUNNER_STOP.clear()
+    logger.info("Starting runner scheduler thread")
     RUNNER_THREAD = threading.Thread(target=_loop, name="quant-gate-runner", daemon=True)
     RUNNER_THREAD.start()
 

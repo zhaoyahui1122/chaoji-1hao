@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Query
 from pydantic import BaseModel
 
-from app.services.paper_store import get_equity_curve, get_history_stats, get_order_history, get_position_history
+from app.services.paper_store import get_equity_curve, get_history_stats, get_position_history
 
 router = APIRouter()
 
@@ -72,31 +72,6 @@ def equity_curve(limit: int = Query(default=100, ge=1, le=1000)):
     return {
         'items': items,
         'count': len(items),
-    }
-
-
-@router.get('/orders')
-def order_history(
-    limit: int = Query(default=100, ge=1, le=1000),
-    symbol: str | None = Query(default=None),
-    status: str | None = Query(default=None),
-    event_type: str | None = Query(default=None),
-    source: str | None = Query(default=None),
-    start_time: str | None = Query(default=None),
-    end_time: str | None = Query(default=None),
-):
-    items = get_order_history(limit=limit, symbol=symbol, status=status, event_type=event_type, source=source, start_time=start_time, end_time=end_time)
-    return {
-        'items': items,
-        'count': len(items),
-        'filters': {
-            'symbol': symbol,
-            'status': status,
-            'event_type': event_type,
-            'source': source,
-            'start_time': start_time,
-            'end_time': end_time,
-        },
     }
 
 

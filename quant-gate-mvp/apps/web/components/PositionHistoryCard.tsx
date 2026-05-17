@@ -1,3 +1,4 @@
+import { useMemo, useState } from 'react'
 import type React from 'react'
 
 import type { HistoryPosition } from './dashboard-types'
@@ -102,11 +103,53 @@ function formatTargetPrice(value: number | null) {
   return value == null ? '-' : Number(value).toFixed(2)
 }
 
+type FilterKey = 'symbol' | 'side' | 'pnl'
+
+function FilterChip({ label, active, onClick }: { label: string; active: boolean; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      style={{
+        padding: '5px 12px',
+        borderRadius: 999,
+        border: active ? '1px solid rgba(59,130,246,0.5)' : '1px solid rgba(148,163,184,0.25)',
+        background: active ? 'rgba(59,130,246,0.12)' : 'rgba(248,250,252,0.6)',
+        color: active ? '#1d4ed8' : '#64748b',
+        fontSize: 12,
+        fontWeight: 700,
+        cursor: 'pointer',
+      }}
+    >
+      {label}
+    </button>
+  )
+}
+
 export default function PositionHistoryCard({
   positionHistory,
 }: {
   positionHistory: HistoryPosition[]
 }) {
+  const [symbolFilter, setSymbolFilter] = useState<string>('')
+  const [sideFilter, setSideFilter] = useState<string>('')
+  const [pnlFilter, setPnlFilter] = useState<string>('')
+
+  const filtered = useMemo(() => {
+    return positionHistory.filter((pos) => {
+      if (symbolFilter && pos.symbol !== symbolFilter) return false
+      if (sideFilter && String(pos.side).toLowerCase() !== sideFilter) return false
+      if (pnlFilter) {
+        const pnl = Number(pos.realized_pnl ?? 0)
+        if (pnlFilter === 'profit' && pnl <= 0) return false
+        if (pnlFilter === 'loss' && pnl >= 0) return false
+      }
+      return true
+    })
+  }, [positionHistory, symbolFilter, sideFilter, pnlFilter])
+
+  const toggle = (current: string, value: string) => current === value ? '' : value
+
   return (
     <div style={cardStyle}>
       <div style={{ marginBottom: 16 }}>
@@ -114,11 +157,32 @@ export default function PositionHistoryCard({
         <div style={{ ...mutedText, marginTop: 6 }}>这里只看最关键的结果：开仓价、平仓价、净盈亏，以及按保证金和名义价值计算的净收益率（已计入买入和卖出手续费）。</div>
       </div>
 
-      {positionHistory.length === 0 ? (
+      <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap', marginBottom: 14 }}>
+        <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+          <span style={{ ...mutedText, fontWeight: 700, minWidth: 32 }}>币种</span>
+          <FilterChip label="全部" active={!symbolFilter} onClick={() => setSymbolFilter('')} />
+          <FilterChip label="BTC" active={symbolFilter === 'BTC_USDT'} onClick={() => setSymbolFilter(toggle(symbolFilter, 'BTC_USDT'))} />
+          <FilterChip label="ETH" active={symbolFilter === 'ETH_USDT'} onClick={() => setSymbolFilter(toggle(symbolFilter, 'ETH_USDT'))} />
+        </div>
+        <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+          <span style={{ ...mutedText, fontWeight: 700, minWidth: 32 }}>方向</span>
+          <FilterChip label="全部" active={!sideFilter} onClick={() => setSideFilter('')} />
+          <FilterChip label="多" active={sideFilter === 'long'} onClick={() => setSideFilter(toggle(sideFilter, 'long'))} />
+          <FilterChip label="空" active={sideFilter === 'short'} onClick={() => setSideFilter(toggle(sideFilter, 'short'))} />
+        </div>
+        <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+          <span style={{ ...mutedText, fontWeight: 700, minWidth: 32 }}>盈亏</span>
+          <FilterChip label="全部" active={!pnlFilter} onClick={() => setPnlFilter('')} />
+          <FilterChip label="盈利" active={pnlFilter === 'profit'} onClick={() => setPnlFilter(toggle(pnlFilter, 'profit'))} />
+          <FilterChip label="亏损" active={pnlFilter === 'loss'} onClick={() => setPnlFilter(toggle(pnlFilter, 'loss'))} />
+        </div>
+      </div>
+
+      {filtered.length === 0 ? (
         <div style={{ ...shellCard, color: '#64748b' }}>暂无历史持仓</div>
       ) : (
         <div style={{ display: 'grid', gap: 12, maxHeight: 420, overflow: 'auto', paddingRight: 4 }}>
-          {positionHistory.map((position) => {
+          {filtered.map((position) => {
             const positionSide = sideColor(position.side)
             const realizedPnl = Number(position.realized_pnl ?? 0)
             const pnlColor = realizedPnl > 0 ? '#166534' : realizedPnl < 0 ? '#b91c1c' : '#475569'
