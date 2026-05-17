@@ -1,0 +1,68 @@
+# 依赖目录
+node_modules/
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+ENV/
+
+# 构建输出
+.next/
+out/
+build/
+dist/
+
+# 数据库文件
+*.db
+*.sqlite
+*.sqlite3
+
+# 环境变量
+.env
+.env.local
+.env.*.local
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# 操作系统文件
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# 日志文件
+*.log
+logs/
+
+# 测试和覆盖率
+.pytest_cache/
+htmlcov/
+.coverage
+coverage/
+
+# 临时文件
+tmp_*.py
+*.tmp
+*.bak
+
+# 回测结果
+opt_results.csv
+*_backtest_results/
+
+# Playwright 测试结果
+test-results/
+playwright-report/
+
+# 状态文件
+state/*.json
+!state/.gitkeep
+
+# 密钥和敏感信息
+*.pem
+*.key
+credentials.json

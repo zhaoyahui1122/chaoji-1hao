@@ -1,0 +1,73 @@
+import requests
+import itertools
+
+BASE_URL = "http://127.0.0.1:8012/backtest"
+
+# Extended range - larger periods
+entry_periods = [60, 80, 100, 120, 150, 200]
+exit_periods = [15, 20, 30, 40, 50]
+sl_values = [0.015, 0.02, 0.025, 0.03]
+tp_values = [0.02, 0.03, 0.05, 0.08]
+
+base_config = {
+    "strategy_type": "turtle",
+    "symbol": "BTC_USDT",
+    "timeframe": "5m",
+    "data_source": "gate",
+    "leverage": 50,
+    "initial_balance": 10000,
+    "allocated_margin": 1000,
+    "turtle_atr_period": 10,
+    "turtle_atr_filter": 0.0,
+    "turtle_adx_period": 14,
+    "turtle_adx_threshold": 25.0,
+    "turtle_rsi_period": 14,
+    "turtle_rsi_oversold": 35,
+    "turtle_rsi_overbought": 70,
+    "turtle_bb_period": 20,
+    "turtle_bb_std": 2.0,
+    "risk_per_trade_pct": 0.01,
+    "fee_rate": 0.0005,
+    "slippage_rate": 0.0002,
+}
+
+results = []
+combos = list(itertools.product(entry_periods, exit_periods, sl_values, tp_values))
+total = len(combos)
+done = 0
+
+for ep, xp, sl, tp in combos:
+    done += 1
+    config = {**base_config, "turtle_entry_period": ep, "turtle_exit_period": xp, "stop_loss_pct": sl, "take_profit_pct": tp}
+    try:
+        resp = requests.post(BASE_URL, json=config, timeout=60)
+        data = resp.json()
+        s = data.get("summary", {})
+        trades = data.get("trades", [])
+        wins = sum(1 for t in trades if t.get("pnl", 0) > 0)
+        results.append({
+            "ep": ep, "xp": xp, "sl": sl, "tp": tp,
+            "trades": s.get("trades", 0), "wr": s.get("win_rate_pct", 0),
+            "pnl": s.get("total_net_pnl", 0), "dd": s.get("max_drawdown_pct", 0),
+            "fees": s.get("total_fees", 0), "wins": wins,
+        })
+    except:
+        pass
+    if done % 50 == 0:
+        print(f"  进度: {done}/{total}")
+
+results.sort(key=lambda x: x["pnl"], reverse=True)
+
+print("\n" + "=" * 100)
+print(f"{'排名':>4} | {'入场':>4} | {'出场':>4} | {'止损':>6} | {'止盈':>6} | {'交易':>5} | {'胜率':>6} | {'赢':>3} | {'净盈亏':>10} | {'手续费':>8} | {'回撤':>6}")
+print("-" * 100)
+for i, r in enumerate(results[:20], 1):
+    print(f"{i:>4} | {r['ep']:>4} | {r['xp']:>4} | {r['sl']*100:>5.1f}% | {r['tp']*100:>5.1f}% | {r['trades']:>5} | {r['wr']:>5.0f}% | {r['wins']:>3} | {r['pnl']:>+10.0f} | {r['fees']:>8.0f} | {r['dd']:>5.1f}%")
+
+# Also show positive PnL results
+positive = [r for r in results if r["pnl"] > 0]
+print(f"\n盈利组合数: {len(positive)}/{len(results)}")
+if positive:
+    print("\n盈利组合 TOP 5:")
+    for i, r in enumerate(positive[:5], 1):
+        print(f"  #{i}: EP={r['ep']} XP={r['xp']} SL={r['sl']*100:.1f}% TP={r['tp']*100:.1f}% | {r['trades']}笔 {r['wr']:.0f}% PnL={r['pnl']:+.0f}")

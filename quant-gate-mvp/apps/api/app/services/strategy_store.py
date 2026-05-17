@@ -1,0 +1,229 @@
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from typing import Any
+
+from app.services.db import load_kv, save_kv
+
+STRATEGY_STATE_PATH = Path(__file__).resolve().parents[4] / "state" / "strategy_config.json"
+STRATEGY_SLOTS_PATH = Path(__file__).resolve().parents[4] / "state" / "strategy_slots.json"
+STRATEGY_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+
+# 优化后的15分钟海龟策略预设参数（2026-05-02 15m ADX过滤优化结果）
+OPTIMIZED_TURTLE_PRESET = {
+    "symbol": "BTC_USDT",
+    "timeframe": "15m",
+    "strategy_type": "turtle",
+    "leverage": 50,
+    "use_boll": False,
+    "boll_period": 20,
+    "boll_std": 2.0,
+    "use_rsi": False,
+    "rsi_period": 14,
+    "rsi_oversold": 30,
+    "rsi_overbought": 70,
+    "use_ma": False,
+    "ma_short": 9,
+    "ma_long": 21,
+    "use_macd": False,
+    "macd_fast": 12,
+    "macd_slow": 26,
+    "macd_signal": 9,
+    "use_kdj": False,
+    "kdj_period": 9,
+    "kdj_signal_period": 3,
+    "kdj_overbought": 80,
+    "kdj_oversold": 20,
+    "turtle_entry_period": 30,
+    "turtle_exit_period": 5,
+    "turtle_atr_period": 10,
+    "turtle_atr_filter": 0.0,
+    "turtle_adx_period": 14,
+    "turtle_adx_threshold": 35.0,
+    "turtle_force_mode": "turtle",
+    "stop_loss_pct": 0.01,
+    "take_profit_pct": 0.02,
+    "risk_per_trade_pct": 0.01,
+    "fee_rate": 0.00015,
+    "slippage_rate": 0.0001,
+    "enabled": True,
+}
+
+DEFAULT_SLOTS = [
+    {
+        "slotId": 1,
+        "name": "15分钟策略",
+        "config": {
+            "symbol": "BTC_USDT",
+            "timeframe": "15m",
+            "strategy_type": "classic",
+            "leverage": 50,
+            "use_boll": True,
+            "boll_period": 24,
+            "boll_std": 2.0,
+            "use_rsi": True,
+            "rsi_period": 14,
+            "rsi_oversold": 35,
+            "rsi_overbought": 65,
+            "use_ma": True,
+            "ma_short": 10,
+            "ma_long": 30,
+            "use_macd": False,
+            "macd_fast": 12,
+            "macd_slow": 26,
+            "macd_signal": 5,
+            "use_kdj": False,
+            "kdj_period": 5,
+            "kdj_signal_period": 3,
+            "kdj_overbought": 80,
+            "kdj_oversold": 20,
+            "min_signal_score": 4,
+            "churn_guard_enabled": True,
+            "turtle_entry_period": 20,
+            "turtle_exit_period": 10,
+            "turtle_atr_period": 14,
+            "turtle_atr_filter": 0.0,
+            "stop_loss_pct": 0.01,
+            "take_profit_pct": 0.015,
+            "risk_per_trade_pct": 0.01,
+            "fee_rate": 0.00015,
+            "slippage_rate": 0.0001,
+            "enabled": True,
+        },
+        "updatedAt": "2026-05-10T00:00:00Z",
+        "locked": False,
+    },
+]
+
+
+def _load_json_fallback(default: dict[str, Any]) -> dict[str, Any]:
+    if not STRATEGY_STATE_PATH.exists():
+        return default
+    try:
+        return json.loads(STRATEGY_STATE_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        return default
+
+
+def load_strategy_config(default: dict[str, Any]) -> dict[str, Any]:
+    data = load_kv("strategy", "config", None)
+    if data is not None:
+        return data
+
+    fallback = _load_json_fallback(default)
+    save_kv("strategy", "config", fallback)
+    return fallback
+
+
+def save_strategy_config(data: dict[str, Any]) -> dict[str, Any]:
+    save_kv("strategy", "config", data)
+    STRATEGY_STATE_PATH.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    return data
+
+
+def load_strategy_slots() -> list[dict[str, Any]]:
+    """加载策略槽列表，首次使用时初始化默认槽（含锁定的海龟优化策略）"""
+    data = load_kv("strategy", "slots", None)
+    if data is not None:
+        return data
+
+    if STRATEGY_SLOTS_PATH.exists():
+        try:
+            slots = json.loads(STRATEGY_SLOTS_PATH.read_text(encoding="utf-8"))
+            save_kv("strategy", "slots", slots)
+            return slots
+        except Exception:
+            pass
+
+    save_kv("strategy", "slots", DEFAULT_SLOTS)
+    STRATEGY_SLOTS_PATH.write_text(json.dumps(DEFAULT_SLOTS, ensure_ascii=False, indent=2), encoding="utf-8")
+    return DEFAULT_SLOTS
+
+
+def save_strategy_slots(slots: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    save_kv("strategy", "slots", slots)
+    STRATEGY_SLOTS_PATH.write_text(json.dumps(slots, ensure_ascii=False, indent=2), encoding="utf-8")
+    return slots
+
+
+def delete_strategy_slot(slot_id: int) -> tuple[bool, str]:
+    """删除策略槽，锁定的槽不允许删除"""
+    slots = load_strategy_slots()
+    target = next((s for s in slots if s["slotId"] == slot_id), None)
+    if target is None:
+        return False, f"策略槽 {slot_id} 不存在"
+    if target.get("locked", False):
+        return False, f"策略槽 {slot_id} 已锁定，不允许删除"
+    new_slots = [s for s in slots if s["slotId"] != slot_id]
+    save_strategy_slots(new_slots)
+    return True, f"策略槽 {slot_id} 已删除"
+
+
+def add_strategy_slot(name: str | None = None) -> dict[str, Any]:
+    """添加新策略槽"""
+    slots = load_strategy_slots()
+    new_id = max((s["slotId"] for s in slots), default=0) + 1
+    from datetime import datetime, timezone
+    new_slot = {
+        "slotId": new_id,
+        "name": name or f"策略 {new_id}",
+        "config": {
+            "symbol": "BTC_USDT",
+            "timeframe": "15m",
+            "strategy_type": "classic",
+            "leverage": 5,
+            "use_boll": True,
+            "boll_period": 20,
+            "boll_std": 2.0,
+            "use_rsi": True,
+            "rsi_period": 14,
+            "rsi_oversold": 30,
+            "rsi_overbought": 70,
+            "use_ma": True,
+            "ma_short": 9,
+            "ma_long": 21,
+            "churn_guard_enabled": False,
+            "turtle_entry_period": 20,
+            "turtle_exit_period": 10,
+            "turtle_atr_period": 14,
+            "turtle_atr_filter": 0.0,
+            "stop_loss_pct": 0.02,
+            "take_profit_pct": 0.04,
+            "risk_per_trade_pct": 0.01,
+            "fee_rate": 0.00015,
+            "slippage_rate": 0.0001,
+            "enabled": True,
+        },
+        "updatedAt": datetime.now(timezone.utc).isoformat(),
+        "locked": False,
+    }
+    slots.append(new_slot)
+    save_strategy_slots(slots)
+    return new_slot
+
+
+def update_strategy_slot_name(slot_id: int, name: str) -> tuple[bool, str]:
+    """更新策略槽名称"""
+    slots = load_strategy_slots()
+    target = next((s for s in slots if s["slotId"] == slot_id), None)
+    if target is None:
+        return False, f"策略槽 {slot_id} 不存在"
+    target["name"] = name
+    save_strategy_slots(slots)
+    return True, f"策略槽 {slot_id} 名称已更新"
+
+
+def update_strategy_slot_config(slot_id: int, config: dict[str, Any]) -> tuple[bool, str]:
+    """更新策略槽配置，锁定的槽不允许修改"""
+    slots = load_strategy_slots()
+    target = next((s for s in slots if s["slotId"] == slot_id), None)
+    if target is None:
+        return False, f"策略槽 {slot_id} 不存在"
+    if target.get("locked", False):
+        return False, f"策略槽 {slot_id} 已锁定，不允许修改参数"
+    from datetime import datetime, timezone
+    target["config"] = config
+    target["updatedAt"] = datetime.now(timezone.utc).isoformat()
+    save_strategy_slots(slots)
+    return True, f"策略槽 {slot_id} 配置已更新"
