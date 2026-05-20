@@ -140,7 +140,7 @@ export function RunnerControlCard({
   onSave: (config: StrategyConfig, slotId?: number, name?: string) => Promise<void>
   onRunBacktest: (config: StrategyConfig) => Promise<void>
   onRunStrategyOnce: () => Promise<void>
-  onToggleRunner: (enabled: boolean, symbols?: Array<'BTC_USDT' | 'ETH_USDT'>) => Promise<void>
+  onToggleRunner: (enabled: boolean, symbols?: Array<'BTC_USDT' | 'ETH_USDT'>, tradeMode?: 'paper' | 'live') => Promise<void>
   onResumeRunner: () => Promise<void>
   priceReference?: {
     symbol: 'BTC_USDT' | 'ETH_USDT'
@@ -177,8 +177,8 @@ export function RunnerControlCard({
       {panelHeader(
         '策略控制',
         '参数调优、单次执行、自动 Runner 控制集中放在同一个操作面板。',
-        <div style={{ ...pillBase, background: dashboard.runner?.enabled ? 'rgba(34,197,94,0.12)' : 'rgba(148,163,184,0.14)', color: dashboard.runner?.enabled ? '#15803d' : '#475569' }}>
-          {dashboard.runner?.enabled ? 'Runner 已启用' : 'Runner 未启用'}
+        <div style={{ ...pillBase, background: dashboard.runner?.enabled ? ((dashboard.runner as any)?.trade_mode === 'live' ? 'rgba(245,158,11,0.12)' : 'rgba(34,197,94,0.12)') : 'rgba(148,163,184,0.14)', color: dashboard.runner?.enabled ? ((dashboard.runner as any)?.trade_mode === 'live' ? '#b45309' : '#15803d') : '#475569' }}>
+          {dashboard.runner?.enabled ? `${(dashboard.runner as any)?.trade_mode === 'live' ? '实盘' : '模拟'} Runner 已启用` : 'Runner 未启用'}
         </div>,
       )}
 
@@ -198,7 +198,7 @@ export function RunnerControlCard({
           </div>
           <div style={summaryPanel}>
             <div style={statLabel}>交易状态</div>
-            <div style={{ ...statValue, marginTop: 6 }}>{dashboard.runner?.enabled ? (dashboard.runner?.is_running ? '自动执行中' : '已启用待执行') : '未启用'}</div>
+            <div style={{ ...statValue, marginTop: 6 }}>{dashboard.runner?.enabled ? ((dashboard.runner as any)?.trade_mode === 'live' ? (dashboard.runner?.is_running ? '实盘自动执行中' : '实盘已启用待执行') : (dashboard.runner?.is_running ? '模拟自动执行中' : '模拟已启用待执行')) : '未启用'}</div>
             <div style={{ marginTop: 8, fontSize: 13 }}>下次执行：{formatUnixTs(dashboard.runner?.next_run_eta)}</div>
             <div style={{ marginTop: 8, fontSize: 13 }}>交易对：{dashboard.runner?.selected_symbols?.join(' / ') || activeStrategy.symbol}</div>
           </div>
@@ -284,7 +284,7 @@ export function RunnerControlCard({
         <div style={{ marginTop: 16, display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
           <button onClick={onRunStrategyOnce} style={primaryButtonStyle}>运行一次策略执行</button>
           <button
-            onClick={() => onToggleRunner(!(dashboard.runner?.enabled ?? false), dashboard.runner?.enabled ? undefined : allSupportedSymbols)}
+            onClick={() => onToggleRunner(!(dashboard.runner?.enabled ?? false), dashboard.runner?.enabled ? undefined : allSupportedSymbols, (dashboard.runner as any)?.trade_mode || 'paper')}
             style={{ ...secondaryButtonStyle, background: dashboard.runner?.enabled ? '#dc2626' : '#2563eb', color: '#fff' }}
           >
             {dashboard.runner?.enabled ? '暂停机器人并市价平仓' : '开启自动运行标记'}
@@ -297,8 +297,8 @@ export function RunnerControlCard({
         {runnerResult ? (
           <div style={{ ...summaryPanel, marginTop: 16, display: 'grid', gap: 8, fontSize: 13, lineHeight: 1.6 }}>
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-              <span style={chipStyle({ color: activeStrategy.strategy_type === 'turtle' ? '#7c3aed' : '#1d4ed8', background: activeStrategy.strategy_type === 'turtle' ? 'rgba(124,58,237,0.12)' : 'rgba(59,130,246,0.12)' })}>
-                {activeStrategy.strategy_type === 'turtle' ? '当前执行：海龟策略' : '当前执行：经典策略'}
+              <span style={chipStyle({ color: activeStrategy.strategy_type === 'turtle' ? '#7c3aed' : activeStrategy.strategy_type === 'ict' ? '#059669' : '#1d4ed8', background: activeStrategy.strategy_type === 'turtle' ? 'rgba(124,58,237,0.12)' : activeStrategy.strategy_type === 'ict' ? 'rgba(5,150,105,0.12)' : 'rgba(59,130,246,0.12)' })}>
+                {activeStrategy.strategy_type === 'turtle' ? '当前执行：海龟策略' : activeStrategy.strategy_type === 'ict' ? '当前执行：ICT三周期策略' : '当前执行：经典策略'}
               </span>
               <span style={chipStyle({ color: '#0f766e', background: 'rgba(20,184,166,0.12)' })}>
                 {activeStrategy.symbol} · {activeStrategy.timeframe} · {activeStrategy.leverage}x
@@ -306,6 +306,10 @@ export function RunnerControlCard({
               {activeStrategy.strategy_type === 'turtle' ? (
                 <span style={chipStyle({ color: '#6d28d9', background: 'rgba(139,92,246,0.12)' })}>
                   Entry {activeStrategy.turtle_entry_period} / Exit {activeStrategy.turtle_exit_period} / ATR {activeStrategy.turtle_atr_period}
+                </span>
+              ) : activeStrategy.strategy_type === 'ict' ? (
+                <span style={chipStyle({ color: '#047857', background: 'rgba(5,150,105,0.10)' })}>
+                  BOS {activeStrategy.ict_bos_lookback ?? 20} / RR 1:{activeStrategy.ict_risk_reward ?? 2.5}
                 </span>
               ) : (
                 <span style={chipStyle({ color: '#b45309', background: 'rgba(245,158,11,0.14)' })}>
@@ -336,14 +340,16 @@ export function RunnerStatusCard({ runner }: { runner?: DashboardRunner }) {
   const lastRunnerResult = runner?.last_result
   const lastRunnerEvent = getRunnerEvent(lastRunnerResult)
   const lastRunnerPayload = getRunnerPayload(lastRunnerResult)
+  const tradeMode = runner?.trade_mode || 'paper'
+  const modeLabel = tradeMode === 'live' ? '实盘' : '模拟'
 
   return (
     <div style={cardStyle}>
       {panelHeader(
         'Runner 状态',
         '自动执行、调度与最近一次事件回执。',
-        <div style={{ ...pillBase, background: runner?.is_running ? 'rgba(16,185,129,0.14)' : 'rgba(148,163,184,0.14)', color: runner?.is_running ? '#047857' : '#475569' }}>
-          {runner?.is_running ? '运行中' : '空闲'}
+        <div style={{ ...pillBase, background: runner?.is_running ? (tradeMode === 'live' ? 'rgba(245,158,11,0.14)' : 'rgba(16,185,129,0.14)') : 'rgba(148,163,184,0.14)', color: runner?.is_running ? (tradeMode === 'live' ? '#b45309' : '#047857') : '#475569' }}>
+          {runner?.is_running ? `${modeLabel}运行中` : runner?.enabled ? `${modeLabel}已启用` : '空闲'}
         </div>,
       )}
 

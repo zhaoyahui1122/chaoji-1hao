@@ -14,7 +14,7 @@ type Props = {
   strategySlots?: Array<{
     slotId: number
     name?: string
-    config: Pick<StrategyConfig, 'symbol' | 'timeframe' | 'strategy_type' | 'leverage' | 'stop_loss_pct' | 'take_profit_pct' | 'risk_per_trade_pct' | 'turtle_entry_period' | 'turtle_exit_period'> & Partial<Pick<StrategyConfig, 'turtle_atr_period' | 'turtle_atr_filter' | 'turtle_adx_period' | 'turtle_adx_threshold' | 'turtle_force_mode' | 'fee_rate' | 'slippage_rate'>>
+    config: Pick<StrategyConfig, 'symbol' | 'timeframe' | 'strategy_type' | 'leverage' | 'stop_loss_pct' | 'take_profit_pct' | 'risk_per_trade_pct' | 'turtle_entry_period' | 'turtle_exit_period'> & Partial<Pick<StrategyConfig, 'turtle_atr_period' | 'turtle_atr_filter' | 'turtle_adx_period' | 'turtle_adx_threshold' | 'turtle_force_mode' | 'ict_bos_lookback' | 'ict_risk_reward' | 'fee_rate' | 'slippage_rate'>>
     locked?: boolean
   }>
   onStrategySlotChange?: (slotId: number) => void
@@ -28,6 +28,8 @@ export default function StrategyForm({ initial, onSave, onRunBacktest, priceRefe
   const [saving, setSaving] = useState(false)
   const [running, setRunning] = useState(false)
   const [backtestDays, setBacktestDays] = useState(7)
+  const [backtestSymbol, setBacktestSymbol] = useState<'BTC_USDT' | 'ETH_USDT'>(initial.symbol)
+  const [backtestLeverage, setBacktestLeverage] = useState(initial.leverage)
   const [backtestNotice, setBacktestNotice] = useState<string | null>(null)
   const [collapsed, setCollapsed] = useState(true)
   const [saveNotice, setSaveNotice] = useState<string | null>(null)
@@ -57,12 +59,15 @@ export default function StrategyForm({ initial, onSave, onRunBacktest, priceRefe
     return () => window.clearTimeout(timer)
   }, [backtestNotice])
 
-  const strategyTypeLabel = form.strategy_type === 'turtle' ? '海龟策略' : '经典策略'
+  const strategyTypeLabel = form.strategy_type === 'turtle' ? '海龟策略' : form.strategy_type === 'ict' ? 'ICT三周期策略' : '经典策略'
 
   const signalSummary = useMemo(() => {
     if (form.strategy_type === 'turtle') {
       const adxPart = form.turtle_adx_threshold ? `, ADX>${form.turtle_adx_threshold}` : ''
       return `海龟(${form.turtle_entry_period}/${form.turtle_exit_period}, ATR ${form.turtle_atr_period}${adxPart})`
+    }
+    if (form.strategy_type === 'ict') {
+      return `ICT(4h BOS ${form.ict_bos_lookback ?? 20} / 1h FVG / 15m 吞没, 1:${form.ict_risk_reward ?? 2.5})`
     }
     const enabled: string[] = []
     if (form.use_boll) enabled.push(`布林(${form.boll_period}, ${form.boll_std})`)
@@ -99,7 +104,7 @@ export default function StrategyForm({ initial, onSave, onRunBacktest, priceRefe
     setRunning(true)
     setBacktestNotice(null)
     try {
-      await onRunBacktest({ ...form }, days)
+      await onRunBacktest({ ...form, symbol: backtestSymbol, leverage: backtestLeverage }, days)
       setBacktestNotice(`${days}天回测成功`)
     } finally {
       setRunning(false)
@@ -177,7 +182,7 @@ export default function StrategyForm({ initial, onSave, onRunBacktest, priceRefe
                       </div>
                     </div>
                     <div style={{ fontSize: 12, color: active ? 'rgba(255,255,255,0.78)' : '#475569', lineHeight: 1.65, marginTop: 8 }}>
-                      {slot.config.symbol} · {slot.config.timeframe} · {slot.config.leverage}x · {slot.config.strategy_type === 'turtle' ? '海龟' : '经典'}
+                      {slot.config.symbol} · {slot.config.timeframe} · {slot.config.leverage}x · {slot.config.strategy_type === 'turtle' ? '海龟' : slot.config.strategy_type === 'ict' ? 'ICT三周期' : '经典'}
                     </div>
                     <div style={{ fontSize: 12, color: active ? 'rgba(255,255,255,0.72)' : '#64748b', lineHeight: 1.65, marginTop: 4 }}>
                       SL {(slot.config.stop_loss_pct * 100).toFixed(2)}% ｜ TP {(slot.config.take_profit_pct * 100).toFixed(2)}% ｜ Risk {(slot.config.risk_per_trade_pct * 100).toFixed(2)}%
@@ -190,6 +195,11 @@ export default function StrategyForm({ initial, onSave, onRunBacktest, priceRefe
                     {slot.config.strategy_type === 'turtle' ? (
                       <div style={{ fontSize: 12, color: active ? 'rgba(255,255,255,0.72)' : '#64748b', lineHeight: 1.65, marginTop: 4 }}>
                         ADX {slot.config.turtle_adx_period ?? '-'} ｜ Threshold {slot.config.turtle_adx_threshold ?? '-'} ｜ Mode {slot.config.turtle_force_mode || '-'} ｜ Fee {slot.config.fee_rate ?? '-'} ｜ Slippage {slot.config.slippage_rate ?? '-'}
+                      </div>
+                    ) : null}
+                    {slot.config.strategy_type === 'ict' ? (
+                      <div style={{ fontSize: 12, color: active ? 'rgba(255,255,255,0.72)' : '#64748b', lineHeight: 1.65, marginTop: 4 }}>
+                        BOS {slot.config.ict_bos_lookback ?? 20} ｜ RR 1:{slot.config.ict_risk_reward ?? 2.5} ｜ 4h BOS + 1h FVG + 15m 吞没
                       </div>
                     ) : null}
                     {locked ? (
@@ -252,10 +262,7 @@ export default function StrategyForm({ initial, onSave, onRunBacktest, priceRefe
       {collapsed ? (
         <div style={sectionStyle}>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 10 }}>
-            <ValueMetric label="交易对" valueText={form.symbol} />
-            <ValueMetric label="周期" valueText={form.timeframe} />
             <ValueMetric label="策略类型" valueText={strategyTypeLabel} />
-            <ValueMetric label="杠杆" valueText={`${form.leverage}x`} />
             <ValueMetric label="已启用信号" valueText={signalSummary} />
             {form.strategy_type === 'turtle' ? (
               <>
@@ -269,6 +276,11 @@ export default function StrategyForm({ initial, onSave, onRunBacktest, priceRefe
                 <ValueMetric label="手续费率" valueText={String(form.fee_rate)} />
                 <ValueMetric label="滑点率" valueText={String(form.slippage_rate)} />
               </>
+            ) : form.strategy_type === 'ict' ? (
+              <>
+                <ValueMetric label="BOS 回看" valueText={String(form.ict_bos_lookback ?? 20)} />
+                <ValueMetric label="风险回报比" valueText={`1:${form.ict_risk_reward ?? 2.5}`} />
+              </>
             ) : (
               <>
                 <ValueMetric label="止损" valueText={`${(form.stop_loss_pct * 100).toFixed(2)}%`} tone="danger" />
@@ -281,55 +293,36 @@ export default function StrategyForm({ initial, onSave, onRunBacktest, priceRefe
 
       {!collapsed ? (
         <>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 }}>
-            <SelectRow label="交易对" value={form.symbol} onChange={(v) => update('symbol', v as StrategyConfig['symbol'])} options={[
-              { value: 'BTC_USDT', label: 'BTC_USDT' },
-              { value: 'ETH_USDT', label: 'ETH_USDT' },
-            ]} disabled={isLocked} />
-            <SelectRow label="周期" value={form.timeframe} onChange={(v) => update('timeframe', v as StrategyConfig['timeframe'])} options={[
-              { value: '5m', label: '5m' },
-              { value: '15m', label: '15m' },
-              { value: '30m', label: '30m' },
-              { value: '1h', label: '1h' },
-              { value: '4h', label: '4h' },
-            ]} disabled={isLocked} />
-            <SelectRow label="策略类型" value={form.strategy_type} onChange={(v) => update('strategy_type', v as StrategyConfig['strategy_type'])} options={[
-              { value: 'classic', label: '经典策略' },
-              { value: 'turtle', label: '海龟策略' },
-            ]} disabled={isLocked} />
-          </div>
+
 
           {priceReference && priceReference.symbol === form.symbol ? (
-            <div style={priceReferenceCardStyle}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap', alignItems: 'center' }}>
-                <div>
-                  <div style={sectionTitleStyle}>本次回测实时参考价</div>
-                  <div style={{ marginTop: 4, fontSize: 12, color: '#64748b' }}>
-                    {priceReference.symbol} · {priceReference.timeframe} · 默认按 long 口径推导止损止盈
-                  </div>
+            form.strategy_type === 'ict' ? (
+              <div style={priceReferenceCardStyle}>
+                <div style={{ fontSize: 13, color: '#059669', lineHeight: 1.7 }}>
+                  ICT 策略的止损止盈由 1h FVG 边界和 1:{form.ict_risk_reward ?? 2.5} 风险回报比决定，执行时由后端实时计算。
                 </div>
-                <div style={{ fontSize: 12, color: '#475569' }}>止损比例：{(priceReference.stop_loss_pct * 100).toFixed(2)}% · 止盈比例：{(priceReference.take_profit_pct * 100).toFixed(2)}%</div>
               </div>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 10, marginTop: 12 }}>
-                <PriceMetric label="当前实时价" value={priceReference.live_price} />
-                <PriceMetric label="当前标记价" value={priceReference.mark_price} />
-                <PriceMetric label="默认 Entry" value={priceReference.default_entry_price} />
-                <PriceMetric label="推导 Stop Loss" value={priceReference.derived_stop_loss_price} tone="danger" />
-                <PriceMetric label="推导 Take Profit" value={priceReference.derived_take_profit_price} />
+            ) : (
+              <div style={priceReferenceCardStyle}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap', alignItems: 'center' }}>
+                  <div>
+                    <div style={sectionTitleStyle}>实时参考价</div>
+                    <div style={{ marginTop: 4, fontSize: 12, color: '#64748b' }}>
+                      {priceReference.symbol} · {priceReference.timeframe} · 默认按 long 口径推导止损止盈
+                    </div>
+                  </div>
+                  <div style={{ fontSize: 12, color: '#475569' }}>止损比例：{(priceReference.stop_loss_pct * 100).toFixed(2)}% · 止盈比例：{(priceReference.take_profit_pct * 100).toFixed(2)}%</div>
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 10, marginTop: 12 }}>
+                  <PriceMetric label="当前实时价" value={priceReference.live_price} />
+                  <PriceMetric label="当前标记价" value={priceReference.mark_price} />
+                  <PriceMetric label="默认 Entry" value={priceReference.default_entry_price} />
+                  <PriceMetric label="推导 Stop Loss" value={priceReference.derived_stop_loss_price} tone="danger" />
+                  <PriceMetric label="推导 Take Profit" value={priceReference.derived_take_profit_price} />
+                </div>
               </div>
-            </div>
+            )
           ) : null}
-
-          <div style={sectionStyle}>
-            <div style={sectionTitleStyle}>基础参数</div>
-            <FieldRow label="杠杆 (1-100)" type="number" value={form.leverage} onChange={(v) => update('leverage', Number(v))} disabled={isLocked} />
-            {form.strategy_type === 'turtle' ? (
-              <>
-                <FieldRow label="手续费率" type="number" step="0.0001" value={form.fee_rate} onChange={(v) => update('fee_rate', Number(v))} disabled={isLocked} />
-                <FieldRow label="滑点率" type="number" step="0.0001" value={form.slippage_rate} onChange={(v) => update('slippage_rate', Number(v))} disabled={isLocked} />
-              </>
-            ) : null}
-          </div>
 
           <div style={sectionStyle}>
             <div style={sectionTitleStyle}>信号参数</div>
@@ -350,6 +343,22 @@ export default function StrategyForm({ initial, onSave, onRunBacktest, priceRefe
                   <FieldRow label="ATR 过滤阈值" type="number" step="0.1" value={form.turtle_atr_filter} onChange={(v) => update('turtle_atr_filter', Number(v))} disabled={isLocked} />
                   <FieldRow label="ADX 周期" type="number" value={form.turtle_adx_period ?? 14} onChange={(v) => update('turtle_adx_period' as any, Number(v))} disabled={isLocked} />
                   <FieldRow label="ADX 趋势门槛" type="number" step="1" value={form.turtle_adx_threshold ?? 25} onChange={(v) => update('turtle_adx_threshold' as any, Number(v))} disabled={isLocked} />
+                  <FieldRow label="手续费率" type="number" step="0.0001" value={form.fee_rate} onChange={(v) => update('fee_rate', Number(v))} disabled={isLocked} />
+                  <FieldRow label="滑点率" type="number" step="0.0001" value={form.slippage_rate} onChange={(v) => update('slippage_rate', Number(v))} disabled={isLocked} />
+                </div>
+              </div>
+            ) : form.strategy_type === 'ict' ? (
+              <div style={indicatorCardStyle}>
+                <div style={{ display: 'grid', gap: 4 }}>
+                  <strong style={{ fontSize: 14, color: '#0f172a' }}>ICT 三周期策略参数</strong>
+                  <div style={{ fontSize: 12, color: '#64748b' }}>4h BOS 趋势过滤 + 1h FVG 区域 + 15m 吞没入场。</div>
+                  <div style={{ fontSize: 12, color: '#059669', background: 'rgba(5,150,105,0.08)', border: '1px solid rgba(5,150,105,0.12)', borderRadius: 10, padding: '8px 10px' }}>
+                    ICT 策略自动拉取 4h / 1h / 15m 三组数据，止损止盈由 FVG 边界和风险回报比决定。
+                  </div>
+                </div>
+                <div style={indicatorFieldsGridStyle}>
+                  <FieldRow label="BOS 回看周期" type="number" value={form.ict_bos_lookback ?? 20} onChange={(v) => update('ict_bos_lookback' as any, Number(v))} disabled={isLocked} />
+                  <FieldRow label="风险回报比" type="number" step="0.1" value={form.ict_risk_reward ?? 2.5} onChange={(v) => update('ict_risk_reward' as any, Number(v))} disabled={isLocked} />
                 </div>
               </div>
             ) : (
@@ -464,6 +473,47 @@ export default function StrategyForm({ initial, onSave, onRunBacktest, priceRefe
         }}>
           {isLocked ? '🔒 策略已锁定' : saving ? '保存中...' : `保存策略 ${strategySlotId}`}
         </button>
+        <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+          <span style={{ fontSize: 12, color: '#475569', fontWeight: 700 }}>交易对</span>
+          {(['BTC_USDT', 'ETH_USDT'] as const).map((sym) => (
+            <button
+              key={sym}
+              type="button"
+              onClick={() => setBacktestSymbol(sym)}
+              style={{
+                ...buttonStyle(backtestSymbol === sym ? 'linear-gradient(135deg, #059669 0%, #34d399 100%)' : 'rgba(15,23,42,0.08)'),
+                color: backtestSymbol === sym ? '#fff' : '#0f172a',
+                boxShadow: 'none',
+                padding: '8px 14px',
+                fontSize: 13,
+              }}
+            >
+              {sym === 'BTC_USDT' ? 'BTC' : 'ETH'}
+            </button>
+          ))}
+        </div>
+        <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+          <span style={{ fontSize: 12, color: '#475569', fontWeight: 700 }}>杠杆</span>
+          <input
+            type="number"
+            min={10}
+            max={150}
+            step={5}
+            value={backtestLeverage}
+            onChange={(e) => setBacktestLeverage(Math.min(150, Math.max(10, Number(e.target.value) || 10)))}
+            style={{
+              width: 64,
+              padding: '8px 6px',
+              borderRadius: 8,
+              border: '1px solid #cbd5e1',
+              fontSize: 13,
+              textAlign: 'center',
+              background: '#f8fafc',
+              color: '#0f172a',
+            }}
+          />
+          <span style={{ fontSize: 13, color: '#64748b' }}>x</span>
+        </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
           <span style={{ fontSize: 12, color: '#475569', fontWeight: 700 }}>回测周期</span>
           {[7, 15, 30].map((days) => (

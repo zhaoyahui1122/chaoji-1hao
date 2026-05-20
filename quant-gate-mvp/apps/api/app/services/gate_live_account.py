@@ -10,6 +10,7 @@ import requests
 GATE_API_BASE = "https://api.gateio.ws"
 GATE_FUTURES_ACCOUNTS_PATH = "/api/v4/futures/usdt/accounts"
 GATE_FUTURES_POSITIONS_PATH = "/api/v4/futures/usdt/positions"
+GATE_FUTURES_CONTRACTS_PATH = "/api/v4/futures/usdt/contracts"
 
 
 def build_gate_signature_headers(
@@ -83,3 +84,18 @@ def fetch_futures_positions(api_key: str, api_secret: str) -> list[dict[str, Any
     if not isinstance(payload, list):
         raise RuntimeError("gate_live_invalid_response")
     return [item for item in payload if isinstance(item, dict)]
+
+
+def fetch_contract_detail(contract: str) -> dict[str, Any]:
+    """Fetch contract details from Gate.io (public endpoint)."""
+    url = f"{GATE_API_BASE}{GATE_FUTURES_CONTRACTS_PATH}/{contract.upper()}"
+    try:
+        resp = requests.get(url, timeout=10)
+    except requests.RequestException as exc:
+        raise RuntimeError(f"gate_contract_fetch_failed: {exc}") from exc
+    if resp.status_code >= 400:
+        raise RuntimeError(f"gate_contract_fetch_failed: status_{resp.status_code}")
+    data = resp.json()
+    if not isinstance(data, dict):
+        raise RuntimeError("gate_contract_invalid_response")
+    return data

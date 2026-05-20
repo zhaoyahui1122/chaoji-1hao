@@ -86,7 +86,7 @@ export type StrategySavePayload = StrategyConfig
 export type BacktestRequestPayload = {
   symbol: Symbol
   timeframe: Timeframe
-  strategy_type: 'classic' | 'turtle'
+  strategy_type: 'classic' | 'turtle' | 'ict'
   data_source: DataSource
   leverage: number
   initial_balance: number
@@ -123,6 +123,12 @@ export type BacktestRequestPayload = {
   turtle_adx_period?: number
   turtle_adx_threshold?: number
   turtle_force_mode?: string | null
+  ict_bos_lookback?: number
+  ict_risk_reward?: number
+  ict_lookback_eng_bars?: number
+  ict_min_fvg_width_pct?: number
+  ict_cooldown_bars?: number
+  ict_require_trend?: boolean
   stop_loss_pct: number
   take_profit_pct: number
   risk_per_trade_pct: number
@@ -132,7 +138,7 @@ export type RunnerRequestPayload = {
   symbol: Symbol
   symbols?: Symbol[] | null
   timeframe: Timeframe
-  strategy_type: 'classic' | 'turtle'
+  strategy_type: 'classic' | 'turtle' | 'ict'
   data_source: DataSource
   leverage: number
   allocated_margin: number
@@ -269,6 +275,7 @@ export type PaperHistoryFilters = {
   source?: string
   start_time?: string
   end_time?: string
+  trade_mode?: string
 }
 
 function buildQuery(params: Record<string, string | number | undefined | null>) {
@@ -358,12 +365,12 @@ export async function getRunnerStatus(): Promise<RunnerStatusResponse> {
   return res.json()
 }
 
-export async function toggleRunner(enabled: boolean, symbols?: Symbol[] | null): Promise<RunnerToggleResponse> {
+export async function toggleRunner(enabled: boolean, symbols?: Symbol[] | null, tradeMode?: 'paper' | 'live'): Promise<RunnerToggleResponse> {
 
   const res = await fetch(`${API_BASE}/runner/toggle`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ enabled, symbols }),
+    body: JSON.stringify({ enabled, symbols, trade_mode: tradeMode || 'paper' }),
   })
   if (!res.ok) throw new Error('Failed to toggle runner')
   return res.json()
@@ -395,9 +402,9 @@ export async function getPaperSnapshot(): Promise<PaperSnapshotResponse> {
   return res.json()
 }
 
-export async function getEquityCurve(limit = 100): Promise<EquityCurveResponse> {
-
-  const res = await fetch(`${API_BASE}/history/equity-curve?limit=${limit}`, { cache: 'no-store' })
+export async function getEquityCurve(limit = 100, tradeMode?: string): Promise<EquityCurveResponse> {
+  const query = buildQuery({ limit, trade_mode: tradeMode })
+  const res = await fetch(`${API_BASE}/history/equity-curve${query}`, { cache: 'no-store' })
   if (!res.ok) throw new Error('Failed to load equity curve')
   return res.json()
 }
@@ -415,7 +422,7 @@ export async function getOrderHistory(
 
 export async function getPositionHistory(
   limit = 100,
-  filters?: { symbol?: string; status?: string; start_time?: string; end_time?: string }
+  filters?: { symbol?: string; status?: string; start_time?: string; end_time?: string; trade_mode?: string }
 ): Promise<PositionHistoryResponse> {
 
   const query = buildQuery({ limit, ...filters })
@@ -424,9 +431,9 @@ export async function getPositionHistory(
   return res.json()
 }
 
-export async function getHistoryStats(): Promise<HistoryStats> {
-
-  const res = await fetch(`${API_BASE}/history/stats`, { cache: 'no-store' })
+export async function getHistoryStats(tradeMode?: string): Promise<HistoryStats> {
+  const query = buildQuery({ trade_mode: tradeMode })
+  const res = await fetch(`${API_BASE}/history/stats${query}`, { cache: 'no-store' })
   if (!res.ok) throw new Error('Failed to load history stats')
   return res.json()
 }
@@ -592,5 +599,21 @@ export async function refreshLiveAccount(): Promise<LiveAccountStatus> {
     const error = await res.json().catch(() => ({ detail: '刷新失败' }))
     throw new Error(error.detail || '刷新失败')
   }
+  return res.json()
+}
+
+export type ContractInfo = {
+  contract: string
+  leverage_min: string
+  leverage_max: string
+  order_size_min?: string
+  order_size_max?: string
+  mark_price?: string
+  index_price?: string
+}
+
+export async function getContractInfo(symbol: string): Promise<ContractInfo> {
+  const res = await fetch(`${API_BASE}/live-account/contract/${symbol}`, { cache: 'no-store' })
+  if (!res.ok) throw new Error('Failed to load contract info')
   return res.json()
 }

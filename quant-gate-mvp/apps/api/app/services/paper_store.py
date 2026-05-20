@@ -106,9 +106,9 @@ def _build_history_filters(
 def reset_structured_paper_state(initial_balance: float) -> dict[str, Any]:
     init_db()
     with get_conn() as conn:
-        conn.execute("DELETE FROM paper_orders")
-        conn.execute("DELETE FROM paper_positions")
-        conn.execute("DELETE FROM paper_account_snapshots")
+        conn.execute("DELETE FROM paper_orders WHERE source != 'live'")
+        conn.execute("DELETE FROM paper_positions WHERE trade_mode != 'live'")
+        conn.execute("DELETE FROM paper_account_snapshots WHERE trade_mode != 'live'")
         conn.commit()
 
     broker_state = {
@@ -125,10 +125,10 @@ def load_structured_paper_state(default: dict[str, Any]) -> dict[str, Any] | Non
     init_db()
     with get_conn() as conn:
         positions = [dict(row) for row in conn.execute(
-            "SELECT position_id, symbol, side, leverage, qty, entry_price, mark_price, fee_rate, slippage_rate, entry_fee, cumulative_fees, entry_slippage_cost, exit_slippage_cost, cumulative_slippage_cost, stop_loss_price, take_profit_price FROM paper_positions WHERE status = 'open' ORDER BY id ASC"
+            "SELECT position_id, symbol, side, leverage, qty, entry_price, mark_price, fee_rate, slippage_rate, entry_fee, cumulative_fees, entry_slippage_cost, exit_slippage_cost, cumulative_slippage_cost, stop_loss_price, take_profit_price FROM paper_positions WHERE status = 'open' AND trade_mode = 'paper' ORDER BY id ASC"
         ).fetchall()]
         latest_snapshot = conn.execute(
-            "SELECT initial_balance, realized_pnl FROM paper_account_snapshots ORDER BY id DESC LIMIT 1"
+            "SELECT initial_balance, realized_pnl FROM paper_account_snapshots WHERE trade_mode = 'paper' ORDER BY id DESC LIMIT 1"
         ).fetchone()
 
         if positions:
@@ -152,10 +152,19 @@ def load_structured_paper_state(default: dict[str, Any]) -> dict[str, Any] | Non
             "orders": orders,
         }
 
+    # 没有持仓时也保留账户权益（从最近的快照恢复）
+    if latest_snapshot:
+        return {
+            "initial_balance": float(latest_snapshot["initial_balance"]),
+            "realized_pnl": float(latest_snapshot["realized_pnl"]),
+            "positions": [],
+            "orders": [],
+        }
+
     return None
 
 
-def replace_structured_paper_state(data: dict[str, Any], account_snapshot: dict[str, Any]) -> None:
+def replace_structured_paper_state(data: dict[str, Any], account_snapshot: dict[str, Any], trade_mode: str = "paper") -> None:
     init_db()
     positions = data.get("positions", [])
     active_position_ids = {
@@ -197,10 +206,10 @@ def replace_structured_paper_state(data: dict[str, Any], account_snapshot: dict[
             if existing_row_id is None:
                 conn.execute(
                     """
-                    INSERT INTO paper_positions(position_id, symbol, side, leverage, qty, entry_price, mark_price, fee_rate, slippage_rate, entry_fee, cumulative_fees, entry_slippage_cost, exit_slippage_cost, cumulative_slippage_cost, stop_loss_price, take_profit_price, status)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open')
+                    INSERT INTO paper_positions(position_id, symbol, side, leverage, qty, entry_price, mark_price, fee_rate, slippage_rate, entry_fee, cumulative_fees, entry_slippage_cost, exit_slippage_cost, cumulative_slippage_cost, stop_loss_price, take_profit_price, status, trade_mode)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?)
                     """,
-                    values,
+                    (*values, trade_mode),
                 )
             else:
                 conn.execute(
@@ -248,8 +257,9 @@ def replace_structured_paper_state(data: dict[str, Any], account_snapshot: dict[
                 margin_used,
                 margin_ratio,
                 unrealized_pnl,
-                open_positions
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                open_positions,
+                trade_mode
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 float(data.get("initial_balance", 10000.0)),
@@ -260,6 +270,7 @@ def replace_structured_paper_state(data: dict[str, Any], account_snapshot: dict[
                 float(account_snapshot.get("margin_ratio", 0.0)),
                 float(account_snapshot.get("unrealized_pnl", 0.0)),
                 int(account_snapshot.get("open_positions", 0)),
+                trade_mode,
             ),
         )
         conn.commit()
@@ -336,17 +347,47 @@ def close_structured_position(
     return None
 
 
-def get_equity_curve(limit: int = 200) -> list[dict[str, Any]]:
+def insert_live_position(
+    position_id: str,
+    symbol: str,
+    side: str,
+    leverage: int,
+    qty: float,
+    entry_price: float,
+    mark_price: float,
+    meta: dict[str, Any] | None = None,
+) -> None:
+    """Insert a live position record for history tracking."""
     init_db()
     with get_conn() as conn:
-        rows = conn.execute(
+        conn.execute(
             """
+            INSERT INTO paper_positions(position_id, symbol, side, leverage, qty, entry_price, mark_price, status, trade_mode)
+            VALUES (?, ?, ?, ?, ?, ?, ?, 'open', 'live')
+            """,
+            (position_id, symbol, side, int(leverage), float(qty), float(entry_price), float(mark_price)),
+        )
+        conn.commit()
+
+
+def get_equity_curve(limit: int = 200, trade_mode: str | None = None) -> list[dict[str, Any]]:
+    init_db()
+    clauses: list[str] = []
+    params: list[Any] = []
+    if trade_mode:
+        clauses.append("trade_mode = ?")
+        params.append(trade_mode)
+    where_sql = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+    with get_conn() as conn:
+        rows = conn.execute(
+            f"""
             SELECT id, equity, realized_pnl, unrealized_pnl, margin_used, open_positions, created_at
             FROM paper_account_snapshots
+            {where_sql}
             ORDER BY id DESC
             LIMIT ?
             """,
-            (int(limit),),
+            (*params, int(limit)),
         ).fetchall()
     items = [dict(row) for row in rows]
     items.reverse()
@@ -361,6 +402,7 @@ def get_order_history(
     source: str | None = None,
     start_time: str | None = None,
     end_time: str | None = None,
+    trade_mode: str | None = None,
 ) -> list[dict[str, Any]]:
     init_db()
     where_sql, params = _build_history_filters(
@@ -372,6 +414,14 @@ def get_order_history(
         end_time=end_time,
         time_column="created_at",
     )
+    if trade_mode == "live":
+        extra = "source = 'live'"
+    elif trade_mode == "paper":
+        extra = "source != 'live'"
+    else:
+        extra = ""
+    if extra:
+        where_sql = f"{where_sql} AND {extra}" if where_sql else f" WHERE {extra}"
     with get_conn() as conn:
         rows = conn.execute(
             f"""
@@ -392,6 +442,7 @@ def get_position_history(
     status: str | None = None,
     start_time: str | None = None,
     end_time: str | None = None,
+    trade_mode: str | None = None,
 ) -> list[dict[str, Any]]:
     init_db()
     where_sql, params = _build_history_filters(
@@ -401,6 +452,10 @@ def get_position_history(
         end_time=end_time,
         time_column="opened_at",
     )
+    if trade_mode:
+        clause = "p.trade_mode = ?"
+        params.append(trade_mode)
+        where_sql = f"{where_sql} AND {clause}" if where_sql else f" WHERE {clause}"
     with get_conn() as conn:
         rows = conn.execute(
             f"""
@@ -422,9 +477,9 @@ def get_position_history(
     return [_enrich_position_history_row(dict(row)) for row in rows]
 
 
-def get_history_stats() -> dict[str, Any]:
-    positions = get_position_history(limit=5000)
-    equity_curve = get_equity_curve(limit=5000)
+def get_history_stats(trade_mode: str | None = None) -> dict[str, Any]:
+    positions = get_position_history(limit=5000, trade_mode=trade_mode)
+    equity_curve = get_equity_curve(limit=5000, trade_mode=trade_mode)
 
     closed_positions = [p for p in positions if p.get("status") == "closed" and p.get("realized_pnl") is not None]
     total_trades = len(closed_positions)

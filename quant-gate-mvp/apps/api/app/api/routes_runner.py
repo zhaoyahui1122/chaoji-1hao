@@ -10,7 +10,7 @@ router = APIRouter()
 Timeframe = Literal["5m", "15m", "30m", "1h", "4h"]
 Symbol = str
 DataSource = Literal["mock", "gate"]
-StrategyType = Literal["classic", "turtle"]
+StrategyType = Literal["classic", "turtle", "ict"]
 TradeMode = Literal["paper", "live"]
 
 
@@ -22,7 +22,7 @@ class RunnerRequest(BaseModel):
     timeframe: Timeframe = "15m"
     data_source: DataSource = "gate"
     trade_mode: TradeMode = "paper"
-    leverage: int = Field(default=5, ge=1, le=100)
+    leverage: int = Field(default=5, ge=1, le=150)
     allocated_margin: float = Field(default=1000, gt=0)
 
     # Classic strategy params
@@ -54,6 +54,14 @@ class RunnerRequest(BaseModel):
     turtle_atr_period: int = Field(default=14, ge=2, le=100)
     turtle_atr_filter: float = Field(default=0.0, ge=0.0)
 
+    # ICT strategy params
+    ict_bos_lookback: int = Field(default=20, ge=5, le=100)
+    ict_risk_reward: float = Field(default=2.5, ge=1.0, le=5.0)
+    ict_lookback_eng_bars: int = Field(default=200, ge=1, le=500)
+    ict_min_fvg_width_pct: float = Field(default=0.0, ge=0.0, le=0.01)
+    ict_cooldown_bars: int = Field(default=0, ge=0, le=100)
+    ict_require_trend: bool = Field(default=False)
+
     # Adaptive strategy params (ADX + RSI mean reversion)
     turtle_adx_period: int = Field(default=14, ge=2, le=100)
     turtle_adx_threshold: float = Field(default=25.0, ge=10.0, le=50.0)
@@ -83,6 +91,7 @@ class RunnerRequest(BaseModel):
 class RunnerToggleRequest(BaseModel):
     enabled: bool
     symbols: list[Symbol] | None = None
+    trade_mode: TradeMode = "paper"
 
     @field_validator("symbols")
     @classmethod
@@ -110,7 +119,7 @@ def status():
 
 @router.post("/toggle")
 def toggle(payload: RunnerToggleRequest):
-    return set_runner_enabled(payload.enabled, payload.symbols)
+    return set_runner_enabled(payload.enabled, payload.symbols, trade_mode=payload.trade_mode)
 
 
 @router.post("/resume")

@@ -115,6 +115,10 @@ def init_db() -> None:
             conn.execute("ALTER TABLE paper_positions ADD COLUMN stop_loss_price REAL NOT NULL DEFAULT 0")
         if not _column_exists(conn, "paper_positions", "take_profit_price"):
             conn.execute("ALTER TABLE paper_positions ADD COLUMN take_profit_price REAL NOT NULL DEFAULT 0")
+        if not _column_exists(conn, "paper_positions", "trade_mode"):
+            conn.execute("ALTER TABLE paper_positions ADD COLUMN trade_mode TEXT NOT NULL DEFAULT 'paper'")
+        if not _column_exists(conn, "paper_account_snapshots", "trade_mode"):
+            conn.execute("ALTER TABLE paper_account_snapshots ADD COLUMN trade_mode TEXT NOT NULL DEFAULT 'paper'")
         conn.commit()
 
 

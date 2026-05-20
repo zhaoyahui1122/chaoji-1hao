@@ -11,6 +11,7 @@ import type {
   RunnerExecutionResult,
   RunnerInvocationResult,
 } from './dashboard-types'
+import type { LiveAccountStatus } from '../lib/api'
 
 function pad2(value: number) {
   return String(value).padStart(2, '0')
@@ -268,6 +269,64 @@ export function buildLiveAccountOverview(
     exposure_ratio: exposureRatio,
     open_positions: positions.length,
   }
+}
+
+export function buildAccountFromLiveStatus(
+  liveStatus: LiveAccountStatus,
+  marketTickers?: MarketTickers,
+): { account: DashboardData['account']; positions: DashboardData['positions'] } {
+  const la = liveStatus.account
+  if (!la) {
+    return {
+      account: { equity: 0, available_balance: 0, margin_used: 0, realized_pnl: 0, total_notional: 0, unrealized_pnl: 0, margin_ratio: 0, exposure_ratio: 0, open_positions: 0 },
+      positions: [],
+    }
+  }
+
+  const positions: DashboardData['positions'] = liveStatus.positions.map((p) => {
+    const livePrice = marketTickers?.[p.symbol as keyof MarketTickers]?.last_price ?? p.mark_price
+    const notional = livePrice * p.size
+    const initialMargin = p.leverage > 0 ? notional / p.leverage : notional
+    const pnl = p.side === 'long'
+      ? (livePrice - p.entry_price) * p.size
+      : (p.entry_price - livePrice) * p.size
+    return {
+      position_id: `${p.symbol}_${p.side}`,
+      symbol: p.symbol as 'BTC_USDT' | 'ETH_USDT',
+      side: p.side,
+      leverage: p.leverage,
+      qty: p.size,
+      entry_price: p.entry_price,
+      mark_price: livePrice,
+      notional,
+      initial_margin: initialMargin,
+      margin_used: initialMargin,
+      maintenance_margin: initialMargin * 0.5,
+      unrealized_pnl: pnl,
+      pnl_return_ratio: initialMargin > 0 ? pnl / initialMargin : 0,
+      margin_ratio: la.equity > 0 ? initialMargin / la.equity : 0,
+      liquidation_price: p.side === 'long' ? p.entry_price * (1 - 1 / p.leverage) : p.entry_price * (1 + 1 / p.leverage),
+      liquidation_distance_ratio: 0,
+    }
+  })
+
+  const totalNotional = positions.reduce((s, p) => s + p.mark_price * p.qty, 0)
+  const marginRatio = la.equity > 0 ? la.margin_used / la.equity : 0
+  const exposureRatio = la.equity > 0 ? totalNotional / la.equity : 0
+
+  const account: DashboardData['account'] = {
+    equity: la.equity,
+    available_balance: la.available_balance,
+    margin_used: la.margin_used,
+    realized_pnl: 0,
+    total_notional: totalNotional,
+    unrealized_pnl: la.unrealized_pnl,
+    margin_ratio: marginRatio,
+    exposure_ratio: exposureRatio,
+    open_positions: positions.length,
+  }
+
+  return { account, positions }
 }
 
 export function buildCurvePath(points: EquityPoint[], width = 520, height = 180) {

@@ -14,6 +14,7 @@ from app.services.gate_live_account import (
     fetch_futures_positions,
 )
 from app.services.live_account_session import get_live_account_session
+from app.services.paper_store import append_order_event, close_structured_position, insert_live_position
 
 logger = get_logger(__name__)
 
@@ -171,6 +172,32 @@ class GateLiveBroker:
             meta_json=json.dumps(meta) if meta else None,
         ))
 
+        # Persist to SQLite for history
+        append_order_event(
+            symbol=contract,
+            side=side,
+            price=price,
+            qty=float(qty),
+            status="filled",
+            event_type="open",
+            position_id=contract,
+            source=source,
+            meta=meta,
+        )
+        try:
+            insert_live_position(
+                position_id=contract,
+                symbol=contract,
+                side=side,
+                leverage=leverage,
+                qty=float(qty),
+                entry_price=price,
+                mark_price=price,
+                meta=meta,
+            )
+        except Exception:
+            pass  # Position may already exist from a previous order
+
         # Sync positions after order
         self.sync_positions()
 
@@ -250,6 +277,27 @@ class GateLiveBroker:
             source=source,
             meta_json=json.dumps(meta) if meta else None,
         ))
+
+        # Persist to SQLite for history
+        append_order_event(
+            symbol=contract,
+            side=target.side,
+            price=price,
+            qty=target.qty,
+            status="filled",
+            event_type="close",
+            position_id=contract,
+            source=source,
+            meta=meta,
+        )
+        try:
+            close_structured_position(
+                position_id=contract,
+                price=price,
+                pnl=pnl,
+            )
+        except Exception:
+            pass
 
         # Sync positions after close
         self.sync_positions()

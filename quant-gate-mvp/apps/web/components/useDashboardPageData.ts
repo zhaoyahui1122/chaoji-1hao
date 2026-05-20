@@ -61,6 +61,7 @@ const DEFAULT_HISTORY_FILTERS: HistoryFilters = {
   source: '',
   start_time: '',
   end_time: '',
+  trade_mode: '',
 }
 
 export function useDashboardPageData() {
@@ -97,6 +98,7 @@ export function useDashboardPageData() {
       source: activeFilters.source || undefined,
       start_time: activeFilters.start_time || undefined,
       end_time: activeFilters.end_time || undefined,
+      trade_mode: activeFilters.trade_mode || undefined,
     }
   }
 
@@ -149,10 +151,14 @@ export function useDashboardPageData() {
     if (!strategyConfig) return null
     const liveTicker = tickers[strategyConfig.symbol]
     const livePrice = liveTicker?.last_price ?? (strategyConfig.symbol === 'BTC_USDT' ? 64000 : 3200)
-    const stopLossPrice = strategyConfig.symbol === 'BTC_USDT' || strategyConfig.symbol === 'ETH_USDT'
+    // ICT 策略的止损止盈由 FVG 边界决定，不做百分比推导
+    const isIct = strategyConfig.strategy_type === 'ict'
+    const stopLossPrice = isIct ? 0
+      : strategyConfig.symbol === 'BTC_USDT' || strategyConfig.symbol === 'ETH_USDT'
       ? livePrice * (1 - strategyConfig.stop_loss_pct)
       : livePrice
-    const takeProfitPrice = strategyConfig.symbol === 'BTC_USDT' || strategyConfig.symbol === 'ETH_USDT'
+    const takeProfitPrice = isIct ? 0
+      : strategyConfig.symbol === 'BTC_USDT' || strategyConfig.symbol === 'ETH_USDT'
       ? livePrice * (1 + strategyConfig.take_profit_pct)
       : livePrice
     return {
@@ -163,8 +169,8 @@ export function useDashboardPageData() {
       default_entry_price: livePrice,
       derived_stop_loss_price: stopLossPrice,
       derived_take_profit_price: takeProfitPrice,
-      stop_loss_pct: strategyConfig.stop_loss_pct,
-      take_profit_pct: strategyConfig.take_profit_pct,
+      stop_loss_pct: isIct ? 0 : strategyConfig.stop_loss_pct,
+      take_profit_pct: isIct ? 0 : strategyConfig.take_profit_pct,
     }
   }
 
@@ -200,10 +206,10 @@ export function useDashboardPageData() {
   async function reloadHistory() {
     const filters = buildHistoryQueryFilters()
     const [equityData, orderData, positionData, statsData] = await Promise.all([
-      getEquityCurve(60),
+      getEquityCurve(60, filters.trade_mode),
       getOrderHistory(100, filters),
       getPositionHistory(100, filters),
-      getHistoryStats(),
+      getHistoryStats(filters.trade_mode),
     ])
     setEquityCurve(equityData.items || [])
     setOrderHistory(orderData.items || [])
@@ -221,6 +227,15 @@ export function useDashboardPageData() {
     historyFiltersRef.current = historyFilters
   }, [historyFilters])
 
+  // trade_mode 切换时立即重载历史数据，不等轮询间隔
+  const prevTradeModeRef = useRef(historyFilters.trade_mode)
+  useEffect(() => {
+    if (prevTradeModeRef.current !== historyFilters.trade_mode) {
+      prevTradeModeRef.current = historyFilters.trade_mode
+      reloadHistory().catch(() => undefined)
+    }
+  }, [historyFilters.trade_mode])
+
   const isLiveUpdating = useMemo(() => {
     if (!dashboard) return false
     return Boolean(dashboard.runner?.enabled || dashboard.runner?.is_running || dashboard.account.open_positions > 0 || dashboard.positions.length > 0)
@@ -234,10 +249,10 @@ export function useDashboardPageData() {
           getDashboard(),
           getStrategy(),
           getRunnerLogs(),
-          getEquityCurve(60),
+          getEquityCurve(60, filters.trade_mode),
           getOrderHistory(100, filters),
           getPositionHistory(100, filters),
-          getHistoryStats(),
+          getHistoryStats(filters.trade_mode),
           getMarketTicker('BTC_USDT').catch(() => null),
           getMarketTicker('ETH_USDT').catch(() => null),
         ])
@@ -492,8 +507,8 @@ export function useDashboardPageData() {
     ])
   }
 
-  async function handleToggleRunner(enabled: boolean, symbols?: Array<'BTC_USDT' | 'ETH_USDT'>) {
-    await toggleRunner(enabled, symbols)
+  async function handleToggleRunner(enabled: boolean, symbols?: Array<'BTC_USDT' | 'ETH_USDT'>, tradeMode?: 'paper' | 'live') {
+    await toggleRunner(enabled, symbols, tradeMode)
     await Promise.all([
       reloadDashboard(),
       reloadRunnerLogs(),

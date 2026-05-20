@@ -3,6 +3,7 @@ import type React from 'react'
 export type DashboardRunner = {
   enabled: boolean
   is_running: boolean
+  trade_mode?: 'paper' | 'live'
   loop_count: number
   last_run_at: string | null
   last_result: RunnerExecutionResult | null
@@ -71,6 +72,7 @@ export type DashboardData = {
     meta_json?: string | null
   }>
   runner?: DashboardRunner
+  trade_mode?: 'paper' | 'live'
   supported_symbols: string[]
   supported_timeframes: string[]
   defaults?: Record<string, unknown>
@@ -79,7 +81,7 @@ export type DashboardData = {
 export type StrategyConfig = {
   symbol: 'BTC_USDT' | 'ETH_USDT'
   timeframe: '5m' | '15m' | '30m' | '1h' | '4h'
-  strategy_type: 'classic' | 'turtle'
+  strategy_type: 'classic' | 'turtle' | 'ict'
   leverage: number
   use_boll: boolean
   boll_period: number
@@ -109,6 +111,12 @@ export type StrategyConfig = {
   turtle_adx_period?: number
   turtle_adx_threshold?: number
   turtle_force_mode?: string | null
+  ict_bos_lookback?: number
+  ict_risk_reward?: number
+  ict_lookback_eng_bars?: number
+  ict_min_fvg_width_pct?: number
+  ict_cooldown_bars?: number
+  ict_require_trend?: boolean
   stop_loss_pct: number
   take_profit_pct: number
   risk_per_trade_pct: number
@@ -366,6 +374,7 @@ export type HistoryFilters = {
   source: string
   start_time: string
   end_time: string
+  trade_mode: string
 }
 
 export const surfaceStyle: React.CSSProperties = {

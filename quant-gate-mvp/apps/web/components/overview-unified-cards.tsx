@@ -228,7 +228,7 @@ export function HistoryFilterCard({
         '历史筛选',
         '统一筛选订单和持仓历史，复盘时先收窄样本，再看结果卡片。',
         <button
-          onClick={() => setHistoryFilters({ symbol: '', status: '', event_type: '', source: '', start_time: '', end_time: '' })}
+          onClick={() => setHistoryFilters({ symbol: '', status: '', event_type: '', source: '', start_time: '', end_time: '', trade_mode: '' })}
           style={{ padding: '11px 14px', borderRadius: 12, border: 0, background: '#6b7280', color: '#fff', fontWeight: 800 }}
         >
           清空筛选
@@ -236,6 +236,14 @@ export function HistoryFilterCard({
       )}
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12 }}>
+        <label style={{ display: 'grid', gap: 6 }}>
+          <span style={labelStyle}>模式</span>
+          <select value={historyFilters.trade_mode} onChange={(e) => setHistoryFilters((prev) => ({ ...prev, trade_mode: e.target.value }))} style={inputStyle}>
+            <option value="">全部</option>
+            <option value="paper">模拟</option>
+            <option value="live">实盘</option>
+          </select>
+        </label>
         <label style={{ display: 'grid', gap: 6 }}>
           <span style={labelStyle}>交易对</span>
           <select value={historyFilters.symbol} onChange={(e) => setHistoryFilters((prev) => ({ ...prev, symbol: e.target.value }))} style={inputStyle}>

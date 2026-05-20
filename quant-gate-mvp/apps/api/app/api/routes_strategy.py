@@ -23,8 +23,8 @@ Symbol = str
 class StrategyConfig(BaseModel):
     symbol: Symbol = "BTC_USDT"
     timeframe: Timeframe = "15m"
-    strategy_type: Literal["classic", "turtle"] = "classic"
-    leverage: int = Field(default=5, ge=1, le=100)
+    strategy_type: Literal["classic", "turtle", "ict"] = "classic"
+    leverage: int = Field(default=5, ge=1, le=150)
     use_boll: bool = True
     boll_period: int = Field(default=20, ge=5, le=200)
     boll_std: float = Field(default=2.0, ge=0.5, le=5.0)
@@ -50,6 +50,12 @@ class StrategyConfig(BaseModel):
     turtle_exit_period: int = Field(default=10, ge=2, le=50)
     turtle_atr_period: int = Field(default=14, ge=2, le=100)
     turtle_atr_filter: float = Field(default=0.0, ge=0.0)
+    ict_bos_lookback: int = Field(default=20, ge=5, le=100)
+    ict_risk_reward: float = Field(default=2.5, ge=1.0, le=5.0)
+    ict_lookback_eng_bars: int = Field(default=200, ge=1, le=500)
+    ict_min_fvg_width_pct: float = Field(default=0.0, ge=0.0, le=0.01)
+    ict_cooldown_bars: int = Field(default=0, ge=0, le=100)
+    ict_require_trend: bool = Field(default=False)
     stop_loss_pct: float = Field(default=0.02, gt=0, le=0.5)
     take_profit_pct: float = Field(default=0.04, gt=0, le=2.0)
     risk_per_trade_pct: float = Field(default=0.01, gt=0, le=0.1)

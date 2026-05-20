@@ -11,7 +11,7 @@ import {
   eyebrowStyle,
 } from './dashboard-layout-styles'
 
-type Tone = 'cyan' | 'blue' | 'green' | 'violet' | 'slate'
+type Tone = 'cyan' | 'blue' | 'green' | 'violet' | 'slate' | 'amber'
 
 const toneMap: Record<Tone, { border: string; glow: string; value: string }> = {
   cyan: { border: 'rgba(34,211,238,0.28)', glow: 'rgba(8,145,178,0.18)', value: '#a5f3fc' },
@@ -19,6 +19,7 @@ const toneMap: Record<Tone, { border: string; glow: string; value: string }> = {
   green: { border: 'rgba(16,185,129,0.24)', glow: 'rgba(5,150,105,0.16)', value: '#a7f3d0' },
   violet: { border: 'rgba(168,85,247,0.24)', glow: 'rgba(126,34,206,0.16)', value: '#e9d5ff' },
   slate: { border: 'rgba(148,163,184,0.2)', glow: 'rgba(51,65,85,0.18)', value: '#e2e8f0' },
+  amber: { border: 'rgba(245,158,11,0.28)', glow: 'rgba(180,83,9,0.18)', value: '#fcd34d' },
 }
 
 export function MetricCard({ label, value, tone }: { label: string; value: string; tone: Tone }) {

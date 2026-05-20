@@ -14,6 +14,7 @@ from app.services.risk import build_risk_sized_order, calc_stop_loss_price, calc
 from app.services.strategy_store import load_strategy_config
 from app.strategy.boll_rsi_ma import compute_indicators as classic_compute_indicators, generate_signal as classic_generate_signal
 from app.strategy.turtle import prepare_signals as turtle_prepare_signals
+from app.strategy.ict import generate_signal as ict_generate_signal
 
 logger = get_logger(__name__)
 
@@ -190,6 +191,7 @@ def _save_and_return(config: dict[str, Any], payload: dict[str, Any]) -> dict[st
         "last_error": None,
         "last_config": config,
         "loop_count": state.get("loop_count", 0) + 1,
+        "trade_mode": config.get("trade_mode", state.get("trade_mode", "paper")),
     })
     return payload
 
@@ -245,6 +247,7 @@ def run_strategy_cycle(config: dict[str, Any]) -> dict[str, Any]:
         "last_config": config,
         "halt_reason": None,
         "selected_symbols": symbols,
+        "trade_mode": trade_mode,
     })
 
     try:
@@ -318,30 +321,71 @@ def _run_single_symbol_cycle(
 ) -> dict[str, Any]:
     if broker is None:
         broker = PAPER_BROKER
-    try:
-        df, market_meta = get_ohlcv(symbol, timeframe, source=data_source)
-    except MarketDataUnavailableError as exc:
-        logger.warning("[%s] Market data unavailable: %s", symbol, exc)
-        return {
-            "ok": True,
-            "symbol": symbol,
-            "action": "skip_data_unavailable",
-            "reason": str(exc),
-            "guard": guard,
-            "market_data": {"requested_source": data_source, "actual_source": "unavailable"},
-        }
-    if df.empty:
-        return {"ok": False, "symbol": symbol, "reason": "no_market_data", "market_data": market_meta}
 
-    last_row = df.iloc[-1]
-    price = float(last_row["close"])
-    candle_high = float(last_row["high"])
-    candle_low = float(last_row["low"])
+    # ---- ICT 策略：多 timeframe 数据拉取 ----
+    if strategy_type == "ict":
+        try:
+            df_15m, market_meta = get_ohlcv(symbol, "15m", source=data_source)
+            df_1h, _ = get_ohlcv(symbol, "1h", source=data_source)
+            df_4h, _ = get_ohlcv(symbol, "4h", source=data_source)
+        except MarketDataUnavailableError as exc:
+            logger.warning("[%s] Market data unavailable: %s", symbol, exc)
+            return {
+                "ok": True,
+                "symbol": symbol,
+                "action": "skip_data_unavailable",
+                "reason": str(exc),
+                "guard": guard,
+                "market_data": {"requested_source": data_source, "actual_source": "unavailable"},
+            }
+        if df_15m.empty or df_1h.empty or df_4h.empty:
+            return {"ok": False, "symbol": symbol, "reason": "no_market_data", "market_data": market_meta}
 
-    if strategy_type == "turtle":
-        signal, extra_meta = _run_turtle_signal(config, df, last_row)
+        last_row = df_15m.iloc[-1]
+        price = float(last_row["close"])
+        candle_high = float(last_row["high"])
+        candle_low = float(last_row["low"])
+
+        bos_lookback = int(config.get("ict_bos_lookback", 20))
+        risk_reward = float(config.get("ict_risk_reward", 2.0))
+        lookback_eng_bars = int(config.get("ict_lookback_eng_bars", 200))
+        min_fvg_width_pct = float(config.get("ict_min_fvg_width_pct", 0.0))
+        require_trend = bool(config.get("ict_require_trend", False))
+        signal, extra_meta = ict_generate_signal(
+            df_4h, df_1h, df_15m,
+            bos_lookback=bos_lookback,
+            risk_reward=risk_reward,
+            lookback_eng_bars=lookback_eng_bars,
+            min_fvg_width_pct=min_fvg_width_pct,
+            require_trend=require_trend,
+        )
+
+    # ---- 经典 / 海龟：单 timeframe ----
     else:
-        signal, extra_meta = _run_classic_signal(config, df, last_row)
+        try:
+            df, market_meta = get_ohlcv(symbol, timeframe, source=data_source)
+        except MarketDataUnavailableError as exc:
+            logger.warning("[%s] Market data unavailable: %s", symbol, exc)
+            return {
+                "ok": True,
+                "symbol": symbol,
+                "action": "skip_data_unavailable",
+                "reason": str(exc),
+                "guard": guard,
+                "market_data": {"requested_source": data_source, "actual_source": "unavailable"},
+            }
+        if df.empty:
+            return {"ok": False, "symbol": symbol, "reason": "no_market_data", "market_data": market_meta}
+
+        last_row = df.iloc[-1]
+        price = float(last_row["close"])
+        candle_high = float(last_row["high"])
+        candle_low = float(last_row["low"])
+
+        if strategy_type == "turtle":
+            signal, extra_meta = _run_turtle_signal(config, df, last_row)
+        else:
+            signal, extra_meta = _run_classic_signal(config, df, last_row)
 
     existing = next((p for p in broker.positions if p.symbol == symbol), None)
 
@@ -400,6 +444,17 @@ def _run_single_symbol_cycle(
             )
             sizing["stop_loss_price"] = sl_price
             sizing["take_profit_price"] = tp_price
+        elif strategy_type == "ict" and extra_meta and extra_meta.get("stop_loss_price"):
+            sl_price = extra_meta["stop_loss_price"]
+            tp_price = extra_meta["take_profit_price"]
+            sizing = build_risk_sized_order(
+                side=signal, account_equity=broker.equity, entry_price=price,
+                leverage=leverage, risk_per_trade_pct=risk_per_trade_pct,
+                stop_loss_pct=stop_loss_pct, take_profit_pct=take_profit_pct,
+                allocated_margin_cap=allocated_margin,
+            )
+            sizing["stop_loss_price"] = sl_price
+            sizing["take_profit_price"] = tp_price
         else:
             sizing = build_risk_sized_order(
                 side=signal, account_equity=broker.equity, entry_price=price,
@@ -422,7 +477,8 @@ def _run_single_symbol_cycle(
                 "risk_per_trade_pct": risk_per_trade_pct, "explicit_qty": explicit_qty,
                 "stop_loss_pct": stop_loss_pct, "stop_loss_price": sizing["stop_loss_price"],
                 "take_profit_pct": take_profit_pct, "take_profit_price": sizing["take_profit_price"],
-                **({"atr": extra_meta.get("atr"), "turtle_signal": extra_meta.get("turtle_signal")} if extra_meta else {}),
+                **({"atr": extra_meta.get("atr"), "turtle_signal": extra_meta.get("turtle_signal")} if extra_meta and strategy_type == "turtle" else {}),
+                **({"ict_signal": extra_meta.get("ict_signal"), "trend_4h": extra_meta.get("trend_4h"), "fvg_top": extra_meta.get("fvg_top"), "fvg_bottom": extra_meta.get("fvg_bottom")} if extra_meta and strategy_type == "ict" else {}),
             },
             fee_rate=fee_rate, slippage_rate=slippage_rate,
             qty=explicit_qty if explicit_qty > 0 else None,
@@ -489,6 +545,7 @@ def get_runner_status() -> dict[str, Any]:
     if state.get("selected_symbols"):
         state["current_strategy_config"]["symbols"] = state["selected_symbols"]
         state["current_strategy_config"]["symbol"] = state["selected_symbols"][0]
+    state["trade_mode"] = state.get("trade_mode", "paper")
     state["live_mark_observer"] = {
         "refresh_interval_seconds": 3,
         "last_refresh_at": state.get("last_live_mark_refresh_at"),
@@ -498,36 +555,40 @@ def get_runner_status() -> dict[str, Any]:
     return state
 
 
-def set_runner_enabled(enabled: bool, symbols: list[str] | None = None) -> dict[str, Any]:
+def set_runner_enabled(enabled: bool, symbols: list[str] | None = None, trade_mode: str = "paper") -> dict[str, Any]:
     state = load_runner_state()
     state["enabled"] = enabled
+    state["trade_mode"] = trade_mode
     if symbols is not None:
         state["selected_symbols"] = symbols
     if not enabled:
         state["next_run_eta"] = None
         state["is_running"] = False
         closed_positions: list[dict[str, Any]] = []
-        for position in list(PAPER_BROKER.positions):
-            result = PAPER_BROKER.close_position(
-                position.symbol,
-                position.mark_price,
-                source="runner",
-                meta={
-                    "runner": True,
-                    "close_reason": "runner_paused",
-                    "trigger_basis": "manual_pause",
-                    "position_id": position.position_id,
-                },
-                position_id=position.position_id,
-            )
-            if result.get("ok"):
-                closed_positions.append({
-                    "position_id": position.position_id,
-                    "symbol": position.symbol,
-                    "side": position.side,
-                    "requested_price": position.mark_price,
-                    "execution_price": result.get("execution_price"),
-                })
+        # 实盘模式暂停时不平仓，只停止策略循环
+        if trade_mode == "paper":
+            broker = get_broker(trade_mode)
+            for position in list(broker.positions):
+                result = broker.close_position(
+                    position.symbol,
+                    position.mark_price,
+                    source="runner",
+                    meta={
+                        "runner": True,
+                        "close_reason": "runner_paused",
+                        "trigger_basis": "manual_pause",
+                        "position_id": position.position_id,
+                    },
+                    position_id=position.position_id,
+                )
+                if result.get("ok"):
+                    closed_positions.append({
+                        "position_id": position.position_id,
+                        "symbol": position.symbol,
+                        "side": position.side,
+                        "requested_price": position.mark_price,
+                        "execution_price": result.get("execution_price"),
+                    })
         state["last_pause_closed_positions"] = closed_positions
     return save_runner_state(state)
 

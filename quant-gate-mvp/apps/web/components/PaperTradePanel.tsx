@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import type React from 'react'
+import { getContractInfo } from '../lib/api'
 
 const DEFAULT_ACCOUNT_EQUITY = 10000
 
@@ -38,7 +39,7 @@ type Props = {
     name: string
     config: {
       symbol: 'BTC_USDT' | 'ETH_USDT'
-      strategy_type?: 'classic' | 'turtle'
+      strategy_type?: 'classic' | 'turtle' | 'ict'
       leverage: number
       stop_loss_pct: number
       take_profit_pct: number
@@ -87,6 +88,8 @@ export default function PaperTradePanel({ onOpen, onMark, onClose, onReset, onRu
   const [isRobotRunning, setIsRobotRunning] = useState(false)
   const [robotFeedback, setRobotFeedback] = useState('')
   const [selectedRobotSymbols, setSelectedRobotSymbols] = useState<Array<'BTC_USDT' | 'ETH_USDT'>>(['BTC_USDT', 'ETH_USDT'])
+  const [leverageOptions, setLeverageOptions] = useState<number[]>([])
+  const [contractLeverageMax, setContractLeverageMax] = useState(100)
 
   useEffect(() => {
     if (typeof robotRunning === 'boolean') {
@@ -208,6 +211,36 @@ export default function PaperTradePanel({ onOpen, onMark, onClose, onReset, onRu
     })
   }, [selectedPreset])
 
+  // 实盘模式下获取合约杠杆范围
+  useEffect(() => {
+    if (tradeMode !== 'live' || !liveConnected) {
+      setLeverageOptions([])
+      return
+    }
+    let cancelled = false
+    async function loadContractInfo() {
+      try {
+        const info = await getContractInfo(activeSymbol)
+        if (cancelled) return
+        const max = Math.min(Number(info.leverage_max) || 100, 100)
+        const min = Math.max(Number(info.leverage_min) || 1, 1)
+        setContractLeverageMax(max)
+        // 生成常用杠杆选项：1,2,3,5,10,20,25,50,75,100 中在 [min,max] 范围内的
+        const presets = [1, 2, 3, 5, 10, 20, 25, 50, 75, 100]
+        const opts = presets.filter(v => v >= min && v <= max)
+        if (!opts.includes(max)) opts.push(max)
+        setLeverageOptions(opts)
+      } catch {
+        if (!cancelled) {
+          setLeverageOptions([1, 2, 3, 5, 10, 20, 25, 50, 75, 100])
+          setContractLeverageMax(100)
+        }
+      }
+    }
+    loadContractInfo()
+    return () => { cancelled = true }
+  }, [tradeMode, liveConnected, activeSymbol])
+
   const selectedPosition = useMemo(
     () => symbolPositions.find((item) => item.position_id === selectedPositionId) || symbolPositions[0] || null,
     [selectedPositionId, symbolPositions],
@@ -300,7 +333,7 @@ export default function PaperTradePanel({ onOpen, onMark, onClose, onReset, onRu
           <div style={eyebrowStyle}>{tradeMode === 'live' ? 'Live Trading Console' : 'Paper Trading Console'}</div>
           <h3 style={{ margin: '6px 0 0', fontSize: 24, letterSpacing: '-0.03em', color: '#f8fafc' }}>{tradeMode === 'live' ? '实盘交易执行台' : '模拟交易执行台'}</h3>
           <p style={{ margin: '10px 0 0', color: 'rgba(226,232,240,0.88)', fontSize: 13, lineHeight: 1.6 }}>
-            {tradeMode === 'live' ? '连接真实 Gate.io 合约账户，查看实时持仓与账户数据。' : '只保留"选策略 → 按策略运行机器人"。开仓价、止盈止损、风险比例等参数统一以策略配置为准。'}
+            {tradeMode === 'live' ? '连接真实 Gate.io 合约账户，策略自动执行真实交易。' : '只保留"选策略 → 按策略运行机器人"。开仓价、止盈止损、风险比例等参数统一以策略配置为准。'}
           </p>
         </div>
         <div style={heroStatsGridStyle}>
@@ -394,6 +427,33 @@ export default function PaperTradePanel({ onOpen, onMark, onClose, onReset, onRu
               </div>
             ) : null}
 
+            {tradeMode === 'live' && liveConnected && leverageOptions.length > 0 ? (
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                <span style={{ fontSize: 13, color: '#94a3b8', minWidth: 80 }}>实盘杠杆：</span>
+                <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                  {leverageOptions.map((lv) => (
+                    <button
+                      key={lv}
+                      type="button"
+                      onClick={() => setLeverage(lv)}
+                      style={{
+                        padding: '4px 10px',
+                        borderRadius: 6,
+                        border: `1px solid ${leverage === lv ? 'rgba(245,158,11,0.6)' : 'rgba(51,65,85,0.8)'}`,
+                        background: leverage === lv ? 'rgba(245,158,11,0.15)' : 'rgba(15,23,42,0.6)',
+                        color: leverage === lv ? '#fcd34d' : '#94a3b8',
+                        fontSize: 13,
+                        fontWeight: leverage === lv ? 700 : 400,
+                        cursor: 'pointer',
+                      }}
+                    >
+                      {lv}x
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+
             {liveTicker ? (
               <div style={hintStyle}>实时最新价：{liveTicker.last_price.toFixed(2)} ｜ 实时标记价：{liveTicker.mark_price.toFixed(2)} ｜ 当前策略交易对：{activeSymbol}</div>
             ) : (
@@ -456,7 +516,30 @@ export default function PaperTradePanel({ onOpen, onMark, onClose, onReset, onRu
             </div>
 
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-              <SelectField label="当前策略交易对" value={symbol} onChange={(v) => setSymbol(v as 'BTC_USDT' | 'ETH_USDT')} options={['BTC_USDT', 'ETH_USDT']} disabled={true} />
+              <div>
+                <div style={{ fontSize: 13, color: '#94a3b8', marginBottom: 6 }}>杠杆倍数</div>
+                <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                  {[1, 2, 3, 5, 10, 20, 25, 50, 75, 100].map((lv) => (
+                    <button
+                      key={lv}
+                      type="button"
+                      onClick={() => setLeverage(lv)}
+                      style={{
+                        padding: '4px 10px',
+                        borderRadius: 6,
+                        border: `1px solid ${leverage === lv ? 'rgba(245,158,11,0.6)' : 'rgba(51,65,85,0.8)'}`,
+                        background: leverage === lv ? 'rgba(245,158,11,0.15)' : 'rgba(15,23,42,0.6)',
+                        color: leverage === lv ? '#fcd34d' : '#94a3b8',
+                        fontSize: 13,
+                        fontWeight: leverage === lv ? 700 : 400,
+                        cursor: 'pointer',
+                      }}
+                    >
+                      {lv}x
+                    </button>
+                  ))}
+                </div>
+              </div>
               <SelectField label="运行模式" value={runMode} onChange={(v) => setRunMode(v as 'manual' | 'auto')} options={[{ value: 'auto', label: '自动（策略信号）' }, { value: 'manual', label: '手动选方向' }]} />
             </div>
 
@@ -497,7 +580,7 @@ export default function PaperTradePanel({ onOpen, onMark, onClose, onReset, onRu
                       symbol: selectedPreset.config.symbol,
                       side,
                       price: runtimePrice,
-                      leverage: selectedPreset.config.leverage,
+                      leverage,
                       allocated_margin: allocatedMargin,
                       stop_loss_price: runtimeStopLoss,
                       risk_per_trade_pct: selectedPreset.config.risk_per_trade_pct,
@@ -519,10 +602,10 @@ export default function PaperTradePanel({ onOpen, onMark, onClose, onReset, onRu
                   setIsStartingRobot(false)
                 }
               }}
-              disabled={!selectedPreset || isStartingRobot || tradeMode === 'live'}
-              style={{ ...primaryButtonStyle, opacity: selectedPreset && !isStartingRobot && tradeMode !== 'live' ? 1 : 0.55, cursor: selectedPreset && !isStartingRobot && tradeMode !== 'live' ? 'pointer' : 'not-allowed' }}
+              disabled={!selectedPreset || isStartingRobot}
+              style={{ ...primaryButtonStyle, opacity: selectedPreset && !isStartingRobot ? 1 : 0.55, cursor: selectedPreset && !isStartingRobot ? 'pointer' : 'not-allowed' }}
             >
-              {tradeMode === 'live' ? '实盘模式暂不支持自动交易' : !selectedPreset ? '请先选择策略' : isStartingRobot ? '启动中...' : isRobotRunning ? '已启动机器人' : runMode === 'auto' ? `自动运行策略 ${selectedPreset.slotId}` : `手动开仓（${side}）`}
+              {!selectedPreset ? '请先选择策略' : isStartingRobot ? '启动中...' : isRobotRunning ? '已启动机器人' : runMode === 'auto' ? `${tradeMode === 'live' ? '实盘' : '模拟'}运行策略 ${selectedPreset.slotId}` : `手动开仓（${side}）`}
             </button>
 
             <button

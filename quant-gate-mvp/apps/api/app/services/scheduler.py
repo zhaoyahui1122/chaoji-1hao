@@ -8,7 +8,7 @@ from typing import Any
 
 from app.api.routes_strategy import StrategyConfig
 from app.core.log_config import get_logger
-from app.core.state import PAPER_BROKER
+from app.core.state import PAPER_BROKER, get_broker
 
 logger = get_logger(__name__)
 from app.services.gate_market_data import fetch_gate_futures_ticker
@@ -36,6 +36,7 @@ def _build_runtime_config() -> dict[str, Any]:
     if selected_symbols:
         config["symbols"] = selected_symbols
         config["symbol"] = selected_symbols[0]
+    config["trade_mode"] = state.get("trade_mode", "paper")
     return config
 
 
@@ -68,11 +69,13 @@ def _resolve_live_mark_exit(position, mark_price: float, stop_loss_price: float,
     return None, None
 
 
-def _extract_live_position_targets(position, stop_loss_pct: float, take_profit_pct: float) -> tuple[float, float]:
+def _extract_live_position_targets(position, stop_loss_pct: float, take_profit_pct: float, broker=None) -> tuple[float, float]:
+    if broker is None:
+        broker = PAPER_BROKER
     open_order = next(
         (
             order
-            for order in reversed(PAPER_BROKER.orders)
+            for order in reversed(broker.orders)
             if order.position_id == position.position_id and order.event_type == "open"
         ),
         None,
@@ -89,8 +92,9 @@ def _extract_live_position_targets(position, stop_loss_pct: float, take_profit_p
     return _extract_position_targets(position, stop_loss_pct, take_profit_pct)
 
 
-def _refresh_open_position_marks() -> dict[str, float]:
-    positions = list(PAPER_BROKER.positions)
+def _refresh_open_position_marks(trade_mode: str = "paper") -> dict[str, float]:
+    broker = get_broker(trade_mode)
+    positions = list(broker.positions)
     if not positions:
         return {}
 
@@ -108,7 +112,7 @@ def _refresh_open_position_marks() -> dict[str, float]:
         mark_price = float(ticker.get("mark_price") or ticker.get("last_price") or 0)
         if mark_price <= 0:
             continue
-        PAPER_BROKER.update_mark_price(
+        broker.update_mark_price(
             symbol,
             mark_price,
             source="runner",
@@ -124,13 +128,17 @@ def _refresh_open_position_marks() -> dict[str, float]:
         refreshed_symbols.add(symbol)
         refreshed_prices[symbol] = mark_price
 
-        symbol_positions = [item for item in list(PAPER_BROKER.positions) if item.symbol == symbol]
+        symbol_positions = [item for item in list(broker.positions) if item.symbol == symbol]
         for live_position in symbol_positions:
-            stop_loss_price, take_profit_price = _extract_live_position_targets(live_position, stop_loss_pct, take_profit_pct)
+            stop_loss_price, take_profit_price = _extract_live_position_targets(live_position, stop_loss_pct, take_profit_pct, broker=broker)
             close_reason, trigger_price = _resolve_live_mark_exit(live_position, mark_price, stop_loss_price, take_profit_price)
             if close_reason is None or trigger_price is None:
                 continue
-            PAPER_BROKER.close_position(
+            # 实盘模式下，实时盯市不自动平仓（避免误触发）
+            if trade_mode == "live":
+                logger.info("[LIVE_MARK] %s would trigger %s @ %s — skipping auto-close in live mode", symbol, close_reason, trigger_price)
+                continue
+            broker.close_position(
                 symbol,
                 trigger_price,
                 source="runner",
@@ -154,7 +162,9 @@ def _refresh_open_position_marks() -> dict[str, float]:
 def _maybe_refresh_live_marks(state: dict[str, Any], now_ts: float) -> None:
     if not state.get("enabled", False):
         return
-    if not PAPER_BROKER.positions:
+    trade_mode = state.get("trade_mode", "paper")
+    broker = get_broker(trade_mode)
+    if not broker.positions:
         return
 
     last_mark_refresh_at = float(state.get("last_mark_refresh_at") or 0)
@@ -162,7 +172,7 @@ def _maybe_refresh_live_marks(state: dict[str, Any], now_ts: float) -> None:
         return
 
     try:
-        refreshed_prices = _refresh_open_position_marks()
+        refreshed_prices = _refresh_open_position_marks(trade_mode)
         save_runner_state({
             **load_runner_state(),
             "last_mark_refresh_at": now_ts,
@@ -232,6 +242,16 @@ def ensure_scheduler_started() -> None:
     if RUNNER_THREAD and RUNNER_THREAD.is_alive():
         return
     RUNNER_STOP.clear()
+    # 后端重启时自动关闭 runner，避免重启后自动开始交易
+    state = load_runner_state()
+    if state.get("enabled") or state.get("is_running"):
+        logger.info("Resetting runner state on startup (was enabled=%s)", state.get("enabled"))
+        save_runner_state({
+            **state,
+            "enabled": False,
+            "is_running": False,
+            "next_run_eta": None,
+        })
     logger.info("Starting runner scheduler thread")
     RUNNER_THREAD = threading.Thread(target=_loop, name="quant-gate-runner", daemon=True)
     RUNNER_THREAD.start()

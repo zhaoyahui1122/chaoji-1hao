@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Query
 from pydantic import BaseModel
 
-from app.services.paper_store import get_equity_curve, get_history_stats, get_position_history
+from app.services.paper_store import get_equity_curve, get_history_stats, get_order_history, get_position_history
 
 router = APIRouter()
 
@@ -67,11 +67,43 @@ class HistoryStatsResponse(BaseModel):
 
 
 @router.get('/equity-curve')
-def equity_curve(limit: int = Query(default=100, ge=1, le=1000)):
-    items = get_equity_curve(limit=limit)
+def equity_curve(limit: int = Query(default=100, ge=1, le=1000), trade_mode: str | None = Query(default=None)):
+    items = get_equity_curve(limit=limit, trade_mode=trade_mode)
     return {
         'items': items,
         'count': len(items),
+    }
+
+
+@router.get('/orders')
+def order_history(
+    limit: int = Query(default=200, ge=1, le=1000),
+    symbol: str | None = Query(default=None),
+    status: str | None = Query(default=None),
+    event_type: str | None = Query(default=None),
+    source: str | None = Query(default=None),
+    start_time: str | None = Query(default=None),
+    end_time: str | None = Query(default=None),
+    trade_mode: str | None = Query(default=None),
+):
+    items = get_order_history(
+        limit=limit, symbol=symbol, status=status,
+        event_type=event_type, source=source,
+        start_time=start_time, end_time=end_time,
+        trade_mode=trade_mode,
+    )
+    return {
+        'items': items,
+        'count': len(items),
+        'filters': {
+            'symbol': symbol,
+            'status': status,
+            'event_type': event_type,
+            'source': source,
+            'start_time': start_time,
+            'end_time': end_time,
+            'trade_mode': trade_mode,
+        },
     }
 
 
@@ -82,8 +114,9 @@ def position_history(
     status: str | None = Query(default=None),
     start_time: str | None = Query(default=None),
     end_time: str | None = Query(default=None),
+    trade_mode: str | None = Query(default=None),
 ):
-    items = get_position_history(limit=limit, symbol=symbol, status=status, start_time=start_time, end_time=end_time)
+    items = get_position_history(limit=limit, symbol=symbol, status=status, start_time=start_time, end_time=end_time, trade_mode=trade_mode)
     return {
         'items': items,
         'count': len(items),
@@ -92,10 +125,11 @@ def position_history(
             'status': status,
             'start_time': start_time,
             'end_time': end_time,
+            'trade_mode': trade_mode,
         },
     }
 
 
 @router.get('/stats', response_model=HistoryStatsResponse)
-def history_stats():
-    return get_history_stats()
+def history_stats(trade_mode: str | None = Query(default=None)):
+    return get_history_stats(trade_mode=trade_mode)

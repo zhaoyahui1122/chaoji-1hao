@@ -14,9 +14,7 @@ import PaperTradePanel from '../components/PaperTradePanel'
 import PositionHistoryCard from '../components/PositionHistoryCard'
 import PositionsOverviewCard from '../components/PositionsOverviewCard'
 import RunnerControlCard from '../components/RunnerControlCard'
-import RunnerGuardCard from '../components/RunnerGuardCard'
 import RunnerStatusCard from '../components/RunnerStatusCard'
-import SupportScopeCard from '../components/SupportScopeCard'
 import { chipStyle } from '../components/dashboard-types'
 import {
   bannerStatGridStyle,
@@ -51,7 +49,7 @@ import {
   twoColBalancedStyle,
   twoColWideStyle,
 } from '../components/dashboard-layout-styles'
-import { buildLiveAccountOverview } from '../components/dashboard-utils'
+import { buildLiveAccountOverview, buildAccountFromLiveStatus } from '../components/dashboard-utils'
 import { useDashboardPageData } from '../components/useDashboardPageData'
 import { getLiveAccountStatus, type LiveAccountStatus } from '../lib/api'
 
@@ -104,6 +102,7 @@ export default function HomePage() {
     handleMarkPaper,
     handleClosePaper,
     handleResetPaper,
+    setHistoryFilters,
   } = useDashboardPageData()
 
   const [activeWindow, setActiveWindow] = useState<WindowKey>('strategy')
@@ -140,7 +139,17 @@ export default function HomePage() {
         running: dashboard.runner!.enabled,
       }))
     }
-  }, [dashboard?.runner?.enabled])
+    // Runner 运行中时从后端状态同步 trade_mode（此时后端状态是权威来源）
+    // Runner 未运行时保留用户手动选择
+    if (dashboard?.runner?.is_running && dashboard?.runner?.trade_mode) {
+      setTradeMode(dashboard.runner.trade_mode)
+    }
+  }, [dashboard?.runner?.enabled, dashboard?.runner?.is_running, dashboard?.runner?.trade_mode])
+
+  // 同步 tradeMode 到历史记录筛选
+  useEffect(() => {
+    setHistoryFilters((prev) => ({ ...prev, trade_mode: tradeMode }))
+  }, [tradeMode, setHistoryFilters])
 
   async function handleStartRobot(symbols?: Array<'BTC_USDT' | 'ETH_USDT'>) {
     const selectedSymbols: Array<'BTC_USDT' | 'ETH_USDT'> = symbols && symbols.length > 0
@@ -148,11 +157,11 @@ export default function HomePage() {
       : dashboard?.runner?.selected_symbols && dashboard.runner.selected_symbols.length > 0
         ? dashboard.runner.selected_symbols
         : ['BTC_USDT', 'ETH_USDT']
-    await handleToggleRunner(true, selectedSymbols)
+    await handleToggleRunner(true, selectedSymbols, tradeMode)
   }
 
   async function handlePauseRobot() {
-    await handleToggleRunner(false)
+    await handleToggleRunner(false, undefined, tradeMode)
     setRobotState({ running: false, baselinePositionIds: [] })
   }
 
@@ -167,6 +176,20 @@ export default function HomePage() {
     () => dashboard ? buildLiveAccountOverview(dashboard.account, dashboard.positions, marketTickers) : null,
     [dashboard, marketTickers],
   )
+
+  // 实盘模式下从 liveAccountStatus 构建总览和持仓
+  const liveModeData = useMemo(
+    () => {
+      if (tradeMode === 'live' && liveConnected && liveAccountStatus) {
+        return buildAccountFromLiveStatus(liveAccountStatus, marketTickers)
+      }
+      return null
+    },
+    [tradeMode, liveConnected, liveAccountStatus, marketTickers],
+  )
+
+  const effectiveAccount = liveModeData?.account ?? liveAccountOverview
+  const effectivePositions = liveModeData?.positions ?? dashboard?.positions ?? []
 
   if (error) {
     return <main style={plainStateStyle}>加载失败：{error}</main>
@@ -214,7 +237,17 @@ export default function HomePage() {
           <div style={sidebarStatStackStyle}>
             <MetricCard label="账户权益" value={`$${liveAccountOverview.equity.toFixed(2)}`} tone="cyan" />
             <MetricCard label="风险暴露" value={`${(liveAccountOverview.exposure_ratio * 100).toFixed(2)}%`} tone="blue" />
-            <MetricCard label="Runner" value={dashboard.runner?.enabled ? (dashboard.runner?.is_running ? '运行中' : '已启用') : '未启动'} tone={dashboard.runner?.enabled ? (dashboard.runner?.is_running ? 'green' : 'cyan') : 'slate'} />
+            <MetricCard label="Runner" value={
+              dashboard.runner?.enabled
+                ? (tradeMode === 'live'
+                  ? (dashboard.runner?.is_running ? '实盘运行中' : '实盘已启用')
+                  : (dashboard.runner?.is_running ? '模拟运行中' : '模拟已启用'))
+                : '未启动'
+            } tone={
+              dashboard.runner?.enabled
+                ? (tradeMode === 'live' ? 'amber' : (dashboard.runner?.is_running ? 'green' : 'cyan'))
+                : 'slate'
+            } />
             <MetricCard label="策略" value={selectedStrategyPreset?.name || `策略 ${selectedStrategySlotId}`} tone="blue" />
           </div>
 
@@ -279,7 +312,7 @@ export default function HomePage() {
 
             {activeWindow === 'positions' && (
               <div style={darkPanelStyle}>
-                <AccountOverviewSection account={liveAccountOverview} />
+                <AccountOverviewSection account={effectiveAccount} />
               </div>
             )}
 
@@ -292,7 +325,7 @@ export default function HomePage() {
                 <SectionHeader title="持仓监控台" hint="账户持仓、浮盈亏与市场参考统一查看。" />
                 <PositionsOverviewCard
                   dashboard={dashboard}
-                  positionsOverride={positionsForOverview}
+                  positionsOverride={effectivePositions}
                   marketTickers={marketTickers}
                   riskConfig={overviewRiskConfig}
                   onClosePosition={handleClosePaper}
@@ -309,7 +342,13 @@ export default function HomePage() {
                     <p style={bannerTextStyle}>把参数、回测、Runner、风险守卫和策略槽位放进一个控制台节奏里，减少来回切屏。</p>
                   </div>
                   <div style={bannerStatGridStyle}>
-                    <HeroMiniStat label="Runner" value={dashboard.runner?.is_running ? '运行中' : '暂停'} />
+                    <HeroMiniStat label="Runner" value={
+                      dashboard.runner?.enabled
+                        ? (tradeMode === 'live'
+                          ? (dashboard.runner?.is_running ? '实盘运行中' : '实盘已启用')
+                          : (dashboard.runner?.is_running ? '模拟运行中' : '模拟已启用'))
+                        : '未启动'
+                    } />
                     <HeroMiniStat label="Preset" value={`${strategyPresets.length}`} />
                     <HeroMiniStat label="Risk" value={`${(strategy.risk_per_trade_pct * 100).toFixed(2)}%`} />
                   </div>
@@ -341,22 +380,9 @@ export default function HomePage() {
                     />
                   </div>
 
-                  <div style={{ display: 'grid', gap: 16 }}>
-                    <div style={darkPanelStyle}>
-                      <SectionHeader title="Runner 状态" hint="查看当前轮询状态与策略执行健康度。" />
-                      <RunnerStatusCard runner={dashboard.runner} />
-                    </div>
-                    <div style={darkPanelStyle}>
-                      <SectionHeader title="风控守卫" hint="观察策略运行边界与保护开关。" />
-                      <RunnerGuardCard runner={dashboard.runner} />
-                    </div>
-                  </div>
-                </div>
-
-                <div style={twoColBalancedStyle}>
                   <div style={darkPanelStyle}>
-                    <SectionHeader title="支持范围" hint="当前交易对、数据源和支持说明。" />
-                    <SupportScopeCard dashboard={dashboard} />
+                    <SectionHeader title="Runner 状态" hint="查看当前轮询状态与策略执行健康度。" />
+                    <RunnerStatusCard runner={dashboard.runner} />
                   </div>
                   <div style={darkPanelStyle}>
                     <SectionHeader title="回测摘要" hint="看收益、交易数与核心表现。" />
@@ -400,6 +426,8 @@ export default function HomePage() {
                       turtle_exit_period: item.config.turtle_exit_period,
                       turtle_atr_period: item.config.turtle_atr_period,
                       turtle_atr_filter: item.config.turtle_atr_filter,
+                      ict_bos_lookback: item.config.ict_bos_lookback,
+                      ict_risk_reward: item.config.ict_risk_reward,
                       stop_loss_pct: item.config.stop_loss_pct,
                       take_profit_pct: item.config.take_profit_pct,
                       risk_per_trade_pct: item.config.risk_per_trade_pct,

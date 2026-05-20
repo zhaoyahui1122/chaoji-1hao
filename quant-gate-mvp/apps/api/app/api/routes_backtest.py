@@ -14,7 +14,7 @@ router = APIRouter()
 Timeframe = Literal["5m", "15m", "30m", "1h", "4h"]
 Symbol = str
 DataSource = Literal["mock", "gate"]
-StrategyType = Literal["classic", "turtle"]
+StrategyType = Literal["classic", "turtle", "ict"]
 
 
 class BacktestRequest(BaseModel):
@@ -23,7 +23,7 @@ class BacktestRequest(BaseModel):
     symbol: Symbol = SETTINGS.default_symbol
     timeframe: Timeframe = SETTINGS.default_timeframe
     data_source: DataSource = "mock"
-    leverage: int = Field(default=SETTINGS.default_leverage, ge=1, le=100)
+    leverage: int = Field(default=SETTINGS.default_leverage, ge=1, le=150)
     initial_balance: float = Field(default=SETTINGS.initial_balance, gt=0)
     allocated_margin: float = Field(default=SETTINGS.default_allocated_margin, gt=0)
     fee_rate: float = Field(default=SETTINGS.default_fee_rate, ge=0, le=0.01)
@@ -74,6 +74,14 @@ class BacktestRequest(BaseModel):
     stop_loss_pct: float = Field(default=0.02, gt=0, le=0.5)
     take_profit_pct: float = Field(default=0.04, gt=0, le=2.0)
     risk_per_trade_pct: float = Field(default=0.01, gt=0, le=0.1)
+
+    # ICT-specific params
+    ict_bos_lookback: int = Field(default=20, ge=5, le=100)
+    ict_risk_reward: float = Field(default=2.5, ge=0.5, le=10.0)
+    ict_cooldown_bars: int = Field(default=0, ge=0, le=100)
+    ict_lookback_eng_bars: int = Field(default=200, ge=1, le=500)
+    ict_min_fvg_width_pct: float = Field(default=0.0, ge=0.0, le=0.01)
+    ict_require_trend: bool = Field(default=False)
 
 
 class BacktestSummary(BaseModel):
@@ -131,8 +139,21 @@ def run_backtest(payload: BacktestRequest):
         )
     except MarketDataUnavailableError as exc:
         raise HTTPException(status_code=503, detail=str(exc))
+
+    df_4h = None
+    df_1h = None
+    if payload.strategy_type == "ict":
+        # ICT 需要 4h + 1h + 15m 三个周期
+        periods_1h = max(payload.backtest_days * 24, 50)
+        periods_4h = max(payload.backtest_days * 6, 20)
+        try:
+            df_1h, _ = get_ohlcv(payload.symbol, "1h", source=payload.data_source, periods=periods_1h, start_time=start_time, end_time=end_time)
+            df_4h, _ = get_ohlcv(payload.symbol, "4h", source=payload.data_source, periods=periods_4h, start_time=start_time, end_time=end_time)
+        except MarketDataUnavailableError as exc:
+            raise HTTPException(status_code=503, detail=str(exc))
+
     engine = SimpleBacktester(initial_balance=payload.initial_balance)
-    result = engine.run(data, payload.model_dump())
+    result = engine.run(data, payload.model_dump(), df_4h=df_4h, df_1h=df_1h)
 
     return {
         "ok": True,
