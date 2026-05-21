@@ -12,6 +12,13 @@ import type {
 } from '../components/dashboard-types'
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE || 'http://127.0.0.1:8012'
+const API_KEY = process.env.NEXT_PUBLIC_API_KEY || ''
+
+function apiHeaders(extra?: Record<string, string>): Record<string, string> {
+  const h: Record<string, string> = { ...extra }
+  if (API_KEY) h['X-API-Key'] = API_KEY
+  return h
+}
 
 export type CandleItem = {
   timestamp: number
@@ -291,28 +298,28 @@ function buildQuery(params: Record<string, string | number | undefined | null>) 
 
 export async function getDashboard(): Promise<DashboardData> {
 
-  const res = await fetch(`${API_BASE}/dashboard`, { cache: 'no-store' })
+  const res = await fetch(`${API_BASE}/dashboard`, { cache: 'no-store', headers: apiHeaders() })
   if (!res.ok) throw new Error('Failed to load dashboard')
   return res.json()
 }
 
 export async function getMarketTicker(symbol: Symbol): Promise<MarketTicker> {
 
-  const res = await fetch(`${API_BASE}/market/ticker/${symbol}`, { cache: 'no-store' })
+  const res = await fetch(`${API_BASE}/market/ticker/${symbol}`, { cache: 'no-store', headers: apiHeaders() })
   if (!res.ok) throw new Error('Failed to load market ticker')
   return res.json()
 }
 
 export async function getMarketCandles(symbol: Symbol, timeframe: Timeframe, limit = 120): Promise<{ symbol: Symbol; timeframe: Timeframe; items: CandleItem[] }> {
 
-  const res = await fetch(`${API_BASE}/market/candles/${symbol}?timeframe=${timeframe}&limit=${limit}`, { cache: 'no-store' })
+  const res = await fetch(`${API_BASE}/market/candles/${symbol}?timeframe=${timeframe}&limit=${limit}`, { cache: 'no-store', headers: apiHeaders() })
   if (!res.ok) throw new Error('Failed to load market candles')
   return res.json()
 }
 
 export async function getStrategy(): Promise<StrategyResponse> {
 
-  const res = await fetch(`${API_BASE}/strategy`, { cache: 'no-store' })
+  const res = await fetch(`${API_BASE}/strategy`, { cache: 'no-store', headers: apiHeaders() })
   if (!res.ok) throw new Error('Failed to load strategy')
   return res.json()
 }
@@ -321,7 +328,7 @@ export async function saveStrategy(payload: StrategySavePayload): Promise<Strate
 
   const res = await fetch(`${API_BASE}/strategy`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: apiHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify(payload),
   })
   if (!res.ok) throw new Error('Failed to save strategy')
@@ -333,7 +340,7 @@ export async function runBacktest(payload: BacktestRequestPayload): Promise<Back
 
   const res = await fetch(`${API_BASE}/backtest`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: apiHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify(payload),
   })
   if (!res.ok) throw new Error('Failed to run backtest')
@@ -344,7 +351,7 @@ export async function runStrategyOnce(payload: RunnerRequestPayload): Promise<Ru
 
   const res = await fetch(`${API_BASE}/runner/run-once`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: apiHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify(payload),
   })
   if (!res.ok) throw new Error('Failed to run strategy once')
@@ -353,14 +360,14 @@ export async function runStrategyOnce(payload: RunnerRequestPayload): Promise<Ru
 
 export async function getRunnerLogs(): Promise<RunnerLogsResponse> {
 
-  const res = await fetch(`${API_BASE}/runner/logs`, { cache: 'no-store' })
+  const res = await fetch(`${API_BASE}/runner/logs`, { cache: 'no-store', headers: apiHeaders() })
   if (!res.ok) throw new Error('Failed to load runner logs')
   return res.json()
 }
 
 export async function getRunnerStatus(): Promise<RunnerStatusResponse> {
 
-  const res = await fetch(`${API_BASE}/runner/status`, { cache: 'no-store' })
+  const res = await fetch(`${API_BASE}/runner/status`, { cache: 'no-store', headers: apiHeaders() })
   if (!res.ok) throw new Error('Failed to load runner status')
   return res.json()
 }
@@ -369,7 +376,7 @@ export async function toggleRunner(enabled: boolean, symbols?: Symbol[] | null, 
 
   const res = await fetch(`${API_BASE}/runner/toggle`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: apiHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify({ enabled, symbols, trade_mode: tradeMode || 'paper' }),
   })
   if (!res.ok) throw new Error('Failed to toggle runner')
@@ -380,6 +387,7 @@ export async function resumeRunner(): Promise<RunnerResumeResponse> {
 
   const res = await fetch(`${API_BASE}/runner/resume`, {
     method: 'POST',
+    headers: apiHeaders(),
   })
   if (!res.ok) throw new Error('Failed to resume runner')
   return res.json()
@@ -388,7 +396,7 @@ export async function resumeRunner(): Promise<RunnerResumeResponse> {
 export async function resetPaperAccount(initialBalance: number): Promise<{ ok: boolean }> {
   const res = await fetch(`${API_BASE}/paper/reset-custom`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: apiHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify({ initial_balance: initialBalance }),
   })
   if (!res.ok) throw new Error('Failed to reset paper account')
@@ -397,14 +405,14 @@ export async function resetPaperAccount(initialBalance: number): Promise<{ ok: b
 
 export async function getPaperSnapshot(): Promise<PaperSnapshotResponse> {
 
-  const res = await fetch(`${API_BASE}/paper/snapshot`, { cache: 'no-store' })
+  const res = await fetch(`${API_BASE}/paper/snapshot`, { cache: 'no-store', headers: apiHeaders() })
   if (!res.ok) throw new Error('Failed to load paper snapshot')
   return res.json()
 }
 
 export async function getEquityCurve(limit = 100, tradeMode?: string): Promise<EquityCurveResponse> {
   const query = buildQuery({ limit, trade_mode: tradeMode })
-  const res = await fetch(`${API_BASE}/history/equity-curve${query}`, { cache: 'no-store' })
+  const res = await fetch(`${API_BASE}/history/equity-curve${query}`, { cache: 'no-store', headers: apiHeaders() })
   if (!res.ok) throw new Error('Failed to load equity curve')
   return res.json()
 }
@@ -415,7 +423,7 @@ export async function getOrderHistory(
 ): Promise<OrderHistoryResponse> {
 
   const query = buildQuery({ limit, ...filters })
-  const res = await fetch(`${API_BASE}/history/orders${query}`, { cache: 'no-store' })
+  const res = await fetch(`${API_BASE}/history/orders${query}`, { cache: 'no-store', headers: apiHeaders() })
   if (!res.ok) throw new Error('Failed to load order history')
   return res.json()
 }
@@ -426,14 +434,14 @@ export async function getPositionHistory(
 ): Promise<PositionHistoryResponse> {
 
   const query = buildQuery({ limit, ...filters })
-  const res = await fetch(`${API_BASE}/history/positions${query}`, { cache: 'no-store' })
+  const res = await fetch(`${API_BASE}/history/positions${query}`, { cache: 'no-store', headers: apiHeaders() })
   if (!res.ok) throw new Error('Failed to load position history')
   return res.json()
 }
 
 export async function getHistoryStats(tradeMode?: string): Promise<HistoryStats> {
   const query = buildQuery({ trade_mode: tradeMode })
-  const res = await fetch(`${API_BASE}/history/stats${query}`, { cache: 'no-store' })
+  const res = await fetch(`${API_BASE}/history/stats${query}`, { cache: 'no-store', headers: apiHeaders() })
   if (!res.ok) throw new Error('Failed to load history stats')
   return res.json()
 }
@@ -443,7 +451,7 @@ export async function placePaperOrder(payload: PaperTradePayload): Promise<Paper
 
   const res = await fetch(`${API_BASE}/paper/order`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: apiHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify(payload),
   })
   if (!res.ok) throw new Error('Failed to place paper order')
@@ -455,7 +463,7 @@ export async function updatePaperMark(payload: PaperMarkPayload): Promise<PaperM
 
   const res = await fetch(`${API_BASE}/paper/mark`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: apiHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify(payload),
   })
   if (!res.ok) throw new Error('Failed to update mark price')
@@ -467,7 +475,7 @@ export async function closePaperPosition(payload: PaperClosePayload): Promise<Pa
 
   const res = await fetch(`${API_BASE}/paper/close`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: apiHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify(payload),
   })
   if (!res.ok) throw new Error('Failed to close paper position')
@@ -491,7 +499,7 @@ export type StrategySlotActionResponse = {
 }
 
 export async function getStrategySlots(): Promise<StrategySlotsResponse> {
-  const res = await fetch(`${API_BASE}/strategy/slots`, { cache: 'no-store' })
+  const res = await fetch(`${API_BASE}/strategy/slots`, { cache: 'no-store', headers: apiHeaders() })
   if (!res.ok) throw new Error('Failed to load strategy slots')
   return res.json()
 }
@@ -499,7 +507,7 @@ export async function getStrategySlots(): Promise<StrategySlotsResponse> {
 export async function addStrategySlot(name?: string): Promise<StrategySlotAddResponse> {
   const res = await fetch(`${API_BASE}/strategy/slots/add`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: apiHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify({ name }),
   })
   if (!res.ok) throw new Error('Failed to add strategy slot')
@@ -509,7 +517,7 @@ export async function addStrategySlot(name?: string): Promise<StrategySlotAddRes
 export async function updateStrategySlotName(slotId: number, name: string): Promise<StrategySlotActionResponse> {
   const res = await fetch(`${API_BASE}/strategy/slots/${slotId}/name`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: apiHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify({ name }),
   })
   if (!res.ok) {
@@ -522,7 +530,7 @@ export async function updateStrategySlotName(slotId: number, name: string): Prom
 export async function updateStrategySlotConfig(slotId: number, config: StrategyConfig): Promise<StrategySlotActionResponse> {
   const res = await fetch(`${API_BASE}/strategy/slots/${slotId}/config`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: apiHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify(config),
   })
   if (!res.ok) {
@@ -535,6 +543,7 @@ export async function updateStrategySlotConfig(slotId: number, config: StrategyC
 export async function deleteStrategySlot(slotId: number): Promise<StrategySlotActionResponse> {
   const res = await fetch(`${API_BASE}/strategy/slots/${slotId}`, {
     method: 'DELETE',
+    headers: apiHeaders(),
   })
   if (!res.ok) {
     const error = await res.json().catch(() => ({ detail: 'Failed to delete slot' }))
@@ -573,7 +582,7 @@ export type LiveAccountStatus = {
 }
 
 export async function getLiveAccountStatus(): Promise<LiveAccountStatus> {
-  const res = await fetch(`${API_BASE}/live-account/status`, { cache: 'no-store' })
+  const res = await fetch(`${API_BASE}/live-account/status`, { cache: 'no-store', headers: apiHeaders() })
   if (!res.ok) throw new Error('Failed to load live account status')
   return res.json()
 }
@@ -581,7 +590,7 @@ export async function getLiveAccountStatus(): Promise<LiveAccountStatus> {
 export async function connectLiveAccount(api_key: string, api_secret: string): Promise<LiveAccountStatus> {
   const res = await fetch(`${API_BASE}/live-account/connect`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: apiHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify({ api_key, api_secret }),
   })
   if (!res.ok) {
@@ -594,6 +603,7 @@ export async function connectLiveAccount(api_key: string, api_secret: string): P
 export async function refreshLiveAccount(): Promise<LiveAccountStatus> {
   const res = await fetch(`${API_BASE}/live-account/refresh`, {
     method: 'POST',
+    headers: apiHeaders(),
   })
   if (!res.ok) {
     const error = await res.json().catch(() => ({ detail: '刷新失败' }))
@@ -613,7 +623,45 @@ export type ContractInfo = {
 }
 
 export async function getContractInfo(symbol: string): Promise<ContractInfo> {
-  const res = await fetch(`${API_BASE}/live-account/contract/${symbol}`, { cache: 'no-store' })
+  const res = await fetch(`${API_BASE}/live-account/contract/${symbol}`, { cache: 'no-store', headers: apiHeaders() })
   if (!res.ok) throw new Error('Failed to load contract info')
+  return res.json()
+}
+
+// ==================== 策略快照 API ====================
+
+export type StrategySnapshot = {
+  id: number
+  label: string | null
+  created_at: string
+}
+
+export async function getStrategySnapshots(limit = 20): Promise<{ snapshots: StrategySnapshot[] }> {
+  const res = await fetch(`${API_BASE}/strategy/snapshots?limit=${limit}`, { cache: 'no-store', headers: apiHeaders() })
+  if (!res.ok) throw new Error('Failed to load snapshots')
+  return res.json()
+}
+
+export async function rollbackStrategy(snapshotId: number): Promise<{ ok: boolean; message: string; config: StrategyConfig }> {
+  const res = await fetch(`${API_BASE}/strategy/rollback/${snapshotId}`, {
+    method: 'POST',
+    headers: apiHeaders(),
+  })
+  if (!res.ok) {
+    const error = await res.json().catch(() => ({ detail: 'Rollback failed' }))
+    throw new Error(error.detail || 'Rollback failed')
+  }
+  return res.json()
+}
+
+// ==================== 导出 API ====================
+
+export function exportTradesUrl(mode: 'paper' | 'live' = 'paper', format: 'csv' | 'json' = 'csv'): string {
+  return `${API_BASE}/export/trades?mode=${mode}&format=${format}`
+}
+
+export async function getExportSummary(mode: 'paper' | 'live' = 'paper'): Promise<Record<string, unknown>> {
+  const res = await fetch(`${API_BASE}/export/summary?mode=${mode}`, { cache: 'no-store', headers: apiHeaders() })
+  if (!res.ok) throw new Error('Failed to load export summary')
   return res.json()
 }

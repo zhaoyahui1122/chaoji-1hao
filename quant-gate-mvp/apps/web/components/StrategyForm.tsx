@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from 'react'
 
 import type { StrategyConfig, StrategyPriceReference } from './dashboard-types'
+import { getStrategySnapshots, rollbackStrategy } from '../lib/api'
 
 type Props = {
   initial: StrategyConfig
@@ -34,6 +35,9 @@ export default function StrategyForm({ initial, onSave, onRunBacktest, priceRefe
   const [collapsed, setCollapsed] = useState(true)
   const [saveNotice, setSaveNotice] = useState<string | null>(null)
   const [slotNameDraft, setSlotNameDraft] = useState(strategySlotName)
+  const [snapshots, setSnapshots] = useState<Array<{ id: number; label: string | null; created_at: string }>>([])
+  const [showSnapshots, setShowSnapshots] = useState(false)
+  const [rollbackNotice, setRollbackNotice] = useState<string | null>(null)
 
   // 判断当前策略槽是否锁定
   const currentSlot = strategySlots.find(s => s.slotId === strategySlotId)
@@ -58,6 +62,29 @@ export default function StrategyForm({ initial, onSave, onRunBacktest, priceRefe
     const timer = window.setTimeout(() => setBacktestNotice(null), 3000)
     return () => window.clearTimeout(timer)
   }, [backtestNotice])
+
+  useEffect(() => {
+    if (!rollbackNotice) return
+    const timer = window.setTimeout(() => setRollbackNotice(null), 3000)
+    return () => window.clearTimeout(timer)
+  }, [rollbackNotice])
+
+  async function loadSnapshots() {
+    try {
+      const data = await getStrategySnapshots(20)
+      setSnapshots(data.snapshots)
+      setShowSnapshots(true)
+    } catch { /* ignore */ }
+  }
+
+  async function handleRollback(snapshotId: number) {
+    try {
+      const data = await rollbackStrategy(snapshotId)
+      setForm(data.config as StrategyConfig)
+      setShowSnapshots(false)
+      setRollbackNotice(`已回滚到快照 #${snapshotId}`)
+    } catch { /* ignore */ }
+  }
 
   const strategyTypeLabel = form.strategy_type === 'turtle' ? '海龟策略' : form.strategy_type === 'ict' ? 'ICT三周期策略' : '经典策略'
 
@@ -473,6 +500,33 @@ export default function StrategyForm({ initial, onSave, onRunBacktest, priceRefe
         }}>
           {isLocked ? '🔒 策略已锁定' : saving ? '保存中...' : `保存策略 ${strategySlotId}`}
         </button>
+        <button onClick={loadSnapshots} style={{
+          ...buttonStyle('linear-gradient(135deg, #475569 0%, #64748b 100%)'),
+          padding: '8px 14px',
+          fontSize: 13,
+        }}>
+          历史版本
+        </button>
+        {rollbackNotice ? <span style={{ fontSize: 13, color: '#166534', fontWeight: 700 }}>{rollbackNotice}</span> : null}
+        {showSnapshots && snapshots.length > 0 && (
+          <div style={{ position: 'relative', display: 'inline-block' }}>
+            <select
+              onChange={(e) => { const id = Number(e.target.value); if (id) handleRollback(id) }}
+              defaultValue=""
+              style={{ padding: '8px 12px', borderRadius: 8, border: '1px solid #cbd5e1', fontSize: 13, background: '#fff' }}
+            >
+              <option value="" disabled>选择版本回滚...</option>
+              {snapshots.map(s => (
+                <option key={s.id} value={s.id}>
+                  #{s.id} {s.label || ''} {new Date(s.created_at).toLocaleString()}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
+        {showSnapshots && snapshots.length === 0 && (
+          <span style={{ fontSize: 12, color: '#64748b' }}>暂无历史版本</span>
+        )}
         <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
           <span style={{ fontSize: 12, color: '#475569', fontWeight: 700 }}>交易对</span>
           {(['BTC_USDT', 'ETH_USDT'] as const).map((sym) => (

@@ -138,8 +138,14 @@ export function PositionsOverviewCard({
             ? (livePrice - position.entry_price) * position.qty
             : (position.entry_price - livePrice) * position.qty
           const pnlReturnRatio = position.initial_margin > 0 ? unrealizedPnl / position.initial_margin : 0
+          const unrealizedPnlPct = position.entry_price > 0
+            ? (position.side === 'long' ? (livePrice - position.entry_price) : (position.entry_price - livePrice)) / position.entry_price
+            : 0
           const stopLossPrice = derivePositionTarget(position, 'stop_loss_price', riskConfig.stopLossPct)
           const takeProfitPrice = derivePositionTarget(position, 'take_profit_price', riskConfig.takeProfitPct)
+          const slDistancePct = position.entry_price > 0
+            ? (position.side === 'long' ? (livePrice - stopLossPrice) : (stopLossPrice - livePrice)) / position.entry_price
+            : 0
           const lastRunConfig = dashboard.runner?.last_run_config
           const currentStrategyConfig = dashboard.runner?.current_strategy_config
           const lastRunScore = readRunnerConfigNumber(lastRunConfig, 'min_signal_score')
@@ -177,6 +183,8 @@ export function PositionsOverviewCard({
                 <MetricTile label="数量" value={toInt(position.qty)} />
                 <MetricTile label="止损价" value={toInt(stopLossPrice)} />
                 <MetricTile label="止盈价" value={toInt(takeProfitPrice)} />
+                <MetricTile label="距止损" value={`${(slDistancePct * 100).toFixed(2)}%`} positive={slDistancePct >= 0.01} />
+                <MetricTile label="未实现盈亏" value={`${(unrealizedPnlPct * 100).toFixed(2)}%`} positive={unrealizedPnlPct >= 0} />
                 <MetricTile label="初始保证金" value={toIntMoney(position.initial_margin)} />
                 <MetricTile label="维持保证金" value={toIntMoney(position.maintenance_margin)} />
                 <MetricTile label="未实现盈亏" value={toIntMoney(unrealizedPnl)} positive={unrealizedPnl >= 0} />

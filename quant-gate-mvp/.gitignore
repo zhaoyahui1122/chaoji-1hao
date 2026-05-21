@@ -12,6 +12,7 @@ ENV/
 out/
 build/
 dist/
+*.tsbuildinfo
 
 # 数据库文件
 *.db
@@ -60,6 +61,8 @@ playwright-report/
 
 # 状态文件
 state/*.json
+state/.cred_key
+state/*.csv
 !state/.gitkeep
 
 # 密钥和敏感信息

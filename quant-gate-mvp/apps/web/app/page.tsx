@@ -237,6 +237,7 @@ export default function HomePage() {
           <div style={sidebarStatStackStyle}>
             <MetricCard label="账户权益" value={`$${liveAccountOverview.equity.toFixed(2)}`} tone="cyan" />
             <MetricCard label="风险暴露" value={`${(liveAccountOverview.exposure_ratio * 100).toFixed(2)}%`} tone="blue" />
+            <MetricCard label="最大回撤" value={dashboard.account.max_drawdown_pct != null ? `${(dashboard.account.max_drawdown_pct * 100).toFixed(2)}%` : '-'} tone={(dashboard.account.max_drawdown_pct ?? 0) > 0.1 ? 'amber' : 'slate'} />
             <MetricCard label="Runner" value={
               dashboard.runner?.enabled
                 ? (tradeMode === 'live'

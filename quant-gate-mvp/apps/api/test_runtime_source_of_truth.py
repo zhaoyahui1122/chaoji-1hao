@@ -418,6 +418,8 @@ def test_pause_runner_closes_open_positions_at_market_mark_price():
     broker = _reload_broker_state()
     strategy_runner_module = importlib.import_module("app.services.strategy_runner")
     strategy_runner_module.PAPER_BROKER = broker
+    strategy_runner_module.get_broker = lambda trade_mode="paper": broker
+
     first_open = broker.place_order(
         symbol="BTC_USDT",
         side="long",

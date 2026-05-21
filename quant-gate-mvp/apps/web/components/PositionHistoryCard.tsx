@@ -3,6 +3,7 @@ import type React from 'react'
 
 import type { HistoryPosition } from './dashboard-types'
 import { cardStyle } from './dashboard-types'
+import { exportTradesUrl } from '../lib/api'
 import { formatDateTime, formatMoney, formatPercent, parseMetaJson, readPositionTargetPrice } from './dashboard-utils'
 
 const mutedText: React.CSSProperties = {
@@ -152,9 +153,18 @@ export default function PositionHistoryCard({
 
   return (
     <div style={cardStyle}>
-      <div style={{ marginBottom: 16 }}>
-        <h2 style={titleStyle}>历史持仓</h2>
-        <div style={{ ...mutedText, marginTop: 6 }}>这里只看最关键的结果：开仓价、平仓价、净盈亏，以及按保证金和名义价值计算的净收益率（已计入买入和卖出手续费）。</div>
+      <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 12 }}>
+        <div>
+          <h2 style={titleStyle}>历史持仓</h2>
+          <div style={{ ...mutedText, marginTop: 6 }}>这里只看最关键的结果：开仓价、平仓价、净盈亏，以及按保证金和名义价值计算的净收益率（已计入买入和卖出手续费）。</div>
+        </div>
+        <a
+          href={exportTradesUrl('paper', 'csv')}
+          download="trades.csv"
+          style={{ padding: '8px 14px', borderRadius: 10, background: 'linear-gradient(135deg, #0f172a 0%, #1e293b 100%)', color: '#fff', fontWeight: 700, fontSize: 13, textDecoration: 'none', whiteSpace: 'nowrap' }}
+        >
+          导出 CSV
+        </a>
       </div>
 
       <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap', marginBottom: 14 }}>

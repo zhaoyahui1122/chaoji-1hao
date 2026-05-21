@@ -18,6 +18,11 @@ class AppSettings(BaseModel):
     max_consecutive_losses: int = Field(default=3, ge=1, le=20)
     max_daily_loss_ratio: float = Field(default=0.05, gt=0, le=0.5)
     max_total_exposure_ratio: float = Field(default=3.0, gt=0, le=20.0)
+    turtle_sl_atr_multiplier: float = Field(default=2.0, ge=0.5, le=10.0)
+    turtle_tp_atr_multiplier: float = Field(default=3.0, ge=1.0, le=20.0)
+    max_drawdown_halt_ratio: float = Field(default=0.15, gt=0, le=0.5)
+    max_trades_per_hour: int = Field(default=5, ge=1, le=100)
+    max_trades_per_day: int = Field(default=20, ge=1, le=500)
 
 
 SETTINGS = AppSettings()

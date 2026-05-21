@@ -33,3 +33,6 @@ class AccountOverview(BaseModel):
     total_notional: float
     exposure_ratio: float
     margin_ratio: float
+    max_drawdown_pct: float = 0.0
+    current_drawdown_pct: float = 0.0
+    peak_equity: float = 0.0

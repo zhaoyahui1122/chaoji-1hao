@@ -1,3 +1,18 @@
+def apply_slippage(side: str, price: float, slippage_rate: float, is_close: bool = False) -> float:
+    """Apply slippage to a price. side='long'|'short', action determined by is_close."""
+    rate = max(float(slippage_rate or 0.0), 0.0)
+    if side == "long":
+        multiplier = 1 - rate if is_close else 1 + rate
+    else:
+        multiplier = 1 + rate if is_close else 1 - rate
+    return float(price) * multiplier
+
+
+def calc_fee(notional: float, fee_rate: float) -> float:
+    """Calculate trading fee on notional value."""
+    return max(float(notional), 0.0) * max(float(fee_rate or 0.0), 0.0)
+
+
 def risk_check(balance: float, order_notional: float, max_risk_ratio: float = 0.1) -> bool:
     if balance <= 0:
         return False

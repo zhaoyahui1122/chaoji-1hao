@@ -172,7 +172,11 @@ def generate_signal(
     if enabled_count == 0:
         return None
 
-    threshold = min(required_score, enabled_count * 2)
+    # 指标不足时直接返回 None，不自动降级阈值
+    if enabled_count * 2 < required_score:
+        return None
+
+    threshold = required_score
     if long_score >= threshold and long_score > short_score:
         return "long"
     if short_score >= threshold and short_score > long_score:

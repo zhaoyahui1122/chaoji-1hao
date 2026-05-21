@@ -9,7 +9,7 @@ def reset_runner_state():
 
 
 def allow_runner_guards(monkeypatch):
-    monkeypatch.setattr('app.services.strategy_runner.evaluate_runner_guards', lambda: {
+    monkeypatch.setattr('app.services.strategy_runner.evaluate_runner_guards', lambda **kwargs: {
         'allowed': True,
         'halt_reason': None,
         'consecutive_loss_count': 0,

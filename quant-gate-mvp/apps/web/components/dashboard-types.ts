@@ -24,6 +24,11 @@ export type DashboardRunner = {
     daily_loss_ratio: number
     total_notional: number
     exposure_ratio: number
+    current_drawdown_pct?: number
+    trades_per_hour?: number
+    trades_per_day?: number
+    max_trades_per_hour?: number
+    max_trades_per_day?: number
   }
 }
 
@@ -40,6 +45,9 @@ export type DashboardData = {
     open_positions: number
     total_notional: number
     exposure_ratio: number
+    max_drawdown_pct?: number
+    current_drawdown_pct?: number
+    peak_equity?: number
   }
   positions: Array<{
     position_id?: string | null

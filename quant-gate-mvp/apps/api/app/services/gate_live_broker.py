@@ -20,6 +20,7 @@ logger = get_logger(__name__)
 
 GATE_FUTURES_ORDERS_PATH = "/api/v4/futures/usdt/orders"
 GATE_FUTURES_POSITIONS_PATH = "/api/v4/futures/usdt/positions"
+GATE_FUTURES_PRICE_ORDERS_PATH = "/api/v4/futures/usdt/price_orders"
 
 
 @dataclass
@@ -123,17 +124,37 @@ class GateLiveBroker:
         api_key, api_secret = self._creds()
         contract = symbol.upper()
 
-        # Set leverage first
+        # Set leverage with proper error handling
+        leverage_actual = leverage
         try:
-            _gate_private_request(
+            lev_resp = _gate_private_request(
                 "PUT",
                 f"{GATE_FUTURES_POSITIONS_PATH}/{contract}",
                 api_key=api_key,
                 api_secret=api_secret,
                 body=json.dumps({"leverage": str(leverage)}),
             )
-        except Exception:
-            pass  # Leverage may already be set
+            if isinstance(lev_resp, dict):
+                leverage_actual = int(float(lev_resp.get("leverage", leverage)))
+        except RuntimeError as exc:
+            error_msg = str(exc)
+            if "status_400" in error_msg or "status_422" in error_msg:
+                logger.error("[LIVE] Leverage set failed (400/422): %s", error_msg)
+                return {"ok": False, "error": "leverage_set_failed", "detail": error_msg}
+            # Network/other error: retry once
+            try:
+                lev_resp = _gate_private_request(
+                    "PUT",
+                    f"{GATE_FUTURES_POSITIONS_PATH}/{contract}",
+                    api_key=api_key,
+                    api_secret=api_secret,
+                    body=json.dumps({"leverage": str(leverage)}),
+                )
+                if isinstance(lev_resp, dict):
+                    leverage_actual = int(float(lev_resp.get("leverage", leverage)))
+            except Exception as exc2:
+                logger.error("[LIVE] Leverage retry failed: %s", exc2)
+                return {"ok": False, "error": "leverage_set_failed", "detail": str(exc2)}
 
         # Calculate qty from allocated margin and leverage
         notional = allocated_margin * leverage
@@ -160,11 +181,16 @@ class GateLiveBroker:
         )
 
         order_id = str(result.get("id", ""))
+
+        # Extract actual fill price from Gate response
+        fill_price = float(result.get("fill_price") or result.get("avg_deal_price") or result.get("price") or 0)
+        execution_price = fill_price if fill_price > 0 else price
+
         self._orders.append(LiveOrder(
             position_id=contract,
             symbol=contract,
             side=side,
-            price=price,
+            price=execution_price,
             qty=float(qty),
             status=str(result.get("status", "filled")),
             event_type="open",
@@ -176,13 +202,14 @@ class GateLiveBroker:
         append_order_event(
             symbol=contract,
             side=side,
-            price=price,
+            price=execution_price,
             qty=float(qty),
             status="filled",
             event_type="open",
             position_id=contract,
             source=source,
             meta=meta,
+            trade_mode="live",
         )
         try:
             insert_live_position(
@@ -191,26 +218,64 @@ class GateLiveBroker:
                 side=side,
                 leverage=leverage,
                 qty=float(qty),
-                entry_price=price,
-                mark_price=price,
+                entry_price=execution_price,
+                mark_price=execution_price,
                 meta=meta,
             )
         except Exception:
             pass  # Position may already exist from a previous order
 
+        # Place exchange-side stop-loss conditional order (safety net)
+        exchange_sl_order_id = None
+        if stop_loss_price and stop_loss_price > 0:
+            try:
+                sl_size = -order_size  # Reverse to close
+                # Gate rule: 1 = price <= trigger (for long stop-loss), 2 = price >= trigger (for short stop-loss)
+                sl_rule = 1 if side == "long" else 2
+                sl_body = json.dumps({
+                    "contract": contract,
+                    "initial": {
+                        "contract": contract,
+                        "size": sl_size,
+                        "price": "0",
+                        "tif": "ioc",
+                        "close": True,
+                        "reduce_only": True,
+                    },
+                    "trigger": {
+                        "price": str(stop_loss_price),
+                        "rule": sl_rule,
+                    },
+                    "order_type": "limit",
+                })
+                sl_result = _gate_private_request(
+                    "POST",
+                    GATE_FUTURES_PRICE_ORDERS_PATH,
+                    api_key=api_key,
+                    api_secret=api_secret,
+                    body=sl_body,
+                )
+                exchange_sl_order_id = str(sl_result.get("id", ""))
+                logger.info("[LIVE] Exchange SL placed: contract=%s trigger=%.1f id=%s", contract, stop_loss_price, exchange_sl_order_id)
+            except Exception as sl_exc:
+                logger.warning("[LIVE] Exchange SL placement failed (non-blocking): %s", sl_exc)
+
         # Sync positions after order
         self.sync_positions()
 
-        logger.info("[LIVE] %s %s %s x%d @ market (order_id=%s)", side.upper(), symbol, order_size, qty, order_id)
+        logger.info("[LIVE] %s %s %s x%d @ market (order_id=%s, fill=%.1f)", side.upper(), symbol, order_size, qty, order_id, execution_price)
         return {
             "ok": True,
             "symbol": symbol,
             "side": side,
             "qty": float(qty),
             "price": price,
+            "execution_price_actual": execution_price,
             "leverage": leverage,
+            "leverage_actual": leverage_actual,
             "stop_loss_price": stop_loss_price,
             "gate_order_id": order_id,
+            "exchange_sl_order_id": exchange_sl_order_id,
         }
 
     def close_position(
@@ -263,14 +328,19 @@ class GateLiveBroker:
         )
 
         order_id = str(result.get("id", ""))
-        pnl = (price - target.entry_price) * target.qty if target.side == "long" else (target.entry_price - price) * target.qty
-        logger.info("[LIVE] CLOSE %s %s @ market (pnl=%.2f, order_id=%s)", contract, target.side, pnl, order_id)
+
+        # Extract actual fill price from Gate response
+        fill_price = float(result.get("fill_price") or result.get("avg_deal_price") or result.get("price") or 0)
+        execution_price = fill_price if fill_price > 0 else price
+
+        pnl = (execution_price - target.entry_price) * target.qty if target.side == "long" else (target.entry_price - execution_price) * target.qty
+        logger.info("[LIVE] CLOSE %s %s @ market (pnl=%.2f, order_id=%s, fill=%.1f)", contract, target.side, pnl, order_id, execution_price)
 
         self._orders.append(LiveOrder(
             position_id=contract,
             symbol=contract,
             side=target.side,
-            price=price,
+            price=execution_price,
             qty=target.qty,
             status=str(result.get("status", "filled")),
             event_type="close",
@@ -282,22 +352,35 @@ class GateLiveBroker:
         append_order_event(
             symbol=contract,
             side=target.side,
-            price=price,
+            price=execution_price,
             qty=target.qty,
             status="filled",
             event_type="close",
             position_id=contract,
             source=source,
             meta=meta,
+            trade_mode="live",
         )
         try:
             close_structured_position(
                 position_id=contract,
-                price=price,
+                price=execution_price,
                 pnl=pnl,
             )
         except Exception:
             pass
+
+        # Cancel exchange-side conditional orders for this contract
+        try:
+            _gate_private_request(
+                "DELETE",
+                f"{GATE_FUTURES_PRICE_ORDERS_PATH}?contract={contract}&status=open",
+                api_key=api_key,
+                api_secret=api_secret,
+            )
+            logger.info("[LIVE] Cancelled conditional orders for %s", contract)
+        except Exception as cancel_exc:
+            logger.warning("[LIVE] Cancel conditional orders failed (non-blocking): %s", cancel_exc)
 
         # Sync positions after close
         self.sync_positions()
@@ -306,7 +389,8 @@ class GateLiveBroker:
             "ok": True,
             "symbol": symbol,
             "pnl": pnl,
-            "execution_price": price,
+            "execution_price": execution_price,
+            "execution_price_actual": execution_price,
             "gate_order_id": order_id,
         }
 

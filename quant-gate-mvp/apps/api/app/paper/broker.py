@@ -9,7 +9,7 @@ from app.core.settings import SETTINGS
 from app.services.contract_metrics import build_account_overview, build_position_metrics
 from app.services.paper_store import append_order_event, close_structured_position, load_structured_paper_state, replace_structured_paper_state, reset_structured_paper_state
 from app.services.runner_state_store import export_runner_state
-from app.services.risk import calc_max_loss, calc_take_profit_price, leverage_risk_check
+from app.services.risk import apply_slippage, calc_fee, calc_max_loss, calc_take_profit_price, leverage_risk_check
 from app.services.state_store import export_json_state
 
 
@@ -58,16 +58,11 @@ class PaperBroker:
 
     @staticmethod
     def _apply_slippage(side: str, price: float, slippage_rate: float, is_close: bool = False) -> float:
-        rate = max(float(slippage_rate or 0.0), 0.0)
-        if side == "long":
-            multiplier = 1 - rate if is_close else 1 + rate
-        else:
-            multiplier = 1 + rate if is_close else 1 - rate
-        return float(price) * multiplier
+        return apply_slippage(side, price, slippage_rate, is_close)
 
     @staticmethod
     def _calc_fee(notional: float, fee_rate: float) -> float:
-        return max(float(notional), 0.0) * max(float(fee_rate or 0.0), 0.0)
+        return calc_fee(notional, fee_rate)
 
     @property
     def equity(self) -> float:

@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from app.services.db import load_kv, save_kv
+from app.services.db import get_conn, load_kv, save_kv, init_db
 
 STRATEGY_STATE_PATH = Path(__file__).resolve().parents[4] / "state" / "strategy_config.json"
 STRATEGY_SLOTS_PATH = Path(__file__).resolve().parents[4] / "state" / "strategy_slots.json"
@@ -289,8 +290,48 @@ def update_strategy_slot_config(slot_id: int, config: dict[str, Any]) -> tuple[b
         return False, f"策略槽 {slot_id} 不存在"
     if target.get("locked", False):
         return False, f"策略槽 {slot_id} 已锁定，不允许修改参数"
-    from datetime import datetime, timezone
     target["config"] = config
     target["updatedAt"] = datetime.now(timezone.utc).isoformat()
     save_strategy_slots(slots)
     return True, f"策略槽 {slot_id} 配置已更新"
+
+
+# ---- 策略参数版本管理 ----
+
+def save_strategy_snapshot(config: dict[str, Any], label: str | None = None) -> int:
+    """保存策略参数快照，返回 snapshot id。"""
+    init_db()
+    config_json = json.dumps(config, ensure_ascii=False)
+    with get_conn() as conn:
+        cur = conn.execute(
+            "INSERT INTO strategy_snapshots(config_json, label) VALUES (?, ?)",
+            (config_json, label),
+        )
+        conn.commit()
+        return cur.lastrowid
+
+
+def list_strategy_snapshots(limit: int = 20) -> list[dict[str, Any]]:
+    """列出历史参数版本，最新在前。"""
+    init_db()
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT id, label, created_at FROM strategy_snapshots ORDER BY id DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def rollback_strategy(snapshot_id: int) -> tuple[bool, str, dict[str, Any] | None]:
+    """回滚到指定快照版本，返回 (ok, msg, config)。"""
+    init_db()
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT config_json FROM strategy_snapshots WHERE id = ?",
+            (snapshot_id,),
+        ).fetchone()
+    if row is None:
+        return False, f"快照 {snapshot_id} 不存在", None
+    config = json.loads(row["config_json"])
+    save_strategy_config(config)
+    return True, f"已回滚到快照 {snapshot_id}", config

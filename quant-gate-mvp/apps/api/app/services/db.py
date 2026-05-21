@@ -87,6 +87,26 @@ def init_db() -> None:
             )
             """
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS strategy_snapshots (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                config_json TEXT NOT NULL,
+                label TEXT,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS drawdown_tracker (
+                id INTEGER PRIMARY KEY,
+                peak_equity REAL NOT NULL,
+                max_drawdown_pct REAL NOT NULL DEFAULT 0,
+                peak_date DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
         if not _column_exists(conn, "paper_positions", "position_id"):
             conn.execute("ALTER TABLE paper_positions ADD COLUMN position_id TEXT")
         if not _column_exists(conn, "paper_positions", "fee_rate"):
@@ -119,6 +139,8 @@ def init_db() -> None:
             conn.execute("ALTER TABLE paper_positions ADD COLUMN trade_mode TEXT NOT NULL DEFAULT 'paper'")
         if not _column_exists(conn, "paper_account_snapshots", "trade_mode"):
             conn.execute("ALTER TABLE paper_account_snapshots ADD COLUMN trade_mode TEXT NOT NULL DEFAULT 'paper'")
+        if not _column_exists(conn, "paper_orders", "trade_mode"):
+            conn.execute("ALTER TABLE paper_orders ADD COLUMN trade_mode TEXT NOT NULL DEFAULT 'paper'")
         conn.commit()
 
 

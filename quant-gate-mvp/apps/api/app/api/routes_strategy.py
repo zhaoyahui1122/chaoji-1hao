@@ -12,6 +12,9 @@ from app.services.strategy_store import (
     add_strategy_slot,
     update_strategy_slot_name,
     update_strategy_slot_config,
+    save_strategy_snapshot,
+    list_strategy_snapshots,
+    rollback_strategy,
 )
 
 router = APIRouter()
@@ -100,8 +103,10 @@ def get_strategy_config():
 def update_strategy_config(config: StrategyConfig):
     global CURRENT_CONFIG
     CURRENT_CONFIG = config
-    save_strategy_config(CURRENT_CONFIG.model_dump())
-    return {"ok": True, "config": CURRENT_CONFIG.model_dump()}
+    data = CURRENT_CONFIG.model_dump()
+    save_strategy_config(data)
+    save_strategy_snapshot(data, label="auto")
+    return {"ok": True, "config": data}
 
 
 @router.get("/slots")
@@ -129,9 +134,11 @@ def update_slot_name(slot_id: int, req: SlotNameUpdate):
 @router.post("/slots/{slot_id}/config")
 def update_slot_config(slot_id: int, config: StrategyConfig):
     """更新策略槽配置"""
-    ok, msg = update_strategy_slot_config(slot_id, config.model_dump())
+    data = config.model_dump()
+    ok, msg = update_strategy_slot_config(slot_id, data)
     if not ok:
         raise HTTPException(status_code=400, detail=msg)
+    save_strategy_snapshot(data, label=f"slot-{slot_id}")
     return {"ok": True, "message": msg}
 
 
@@ -153,3 +160,20 @@ def delete_slot(slot_id: int):
     if not ok:
         raise HTTPException(status_code=400, detail=msg)
     return {"ok": True, "message": msg}
+
+
+@router.get("/snapshots")
+def get_snapshots(limit: int = 20):
+    """列出历史参数版本"""
+    return {"snapshots": list_strategy_snapshots(limit=limit)}
+
+
+@router.post("/rollback/{snapshot_id}")
+def do_rollback(snapshot_id: int):
+    """回滚到指定快照版本"""
+    global CURRENT_CONFIG
+    ok, msg, config = rollback_strategy(snapshot_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail=msg)
+    CURRENT_CONFIG = StrategyConfig(**config)
+    return {"ok": True, "message": msg, "config": CURRENT_CONFIG.model_dump()}

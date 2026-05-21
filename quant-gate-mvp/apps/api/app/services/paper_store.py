@@ -286,6 +286,7 @@ def append_order_event(
     position_id: str | None = None,
     source: str = "manual",
     meta: dict[str, Any] | None = None,
+    trade_mode: str = "paper",
 ) -> None:
     init_db()
     normalized_event_type = event_type or _normalize_event_type(status)
@@ -293,10 +294,10 @@ def append_order_event(
     with get_conn() as conn:
         conn.execute(
             """
-            INSERT INTO paper_orders(position_id, symbol, side, price, qty, status, event_type, source, meta_json)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO paper_orders(position_id, symbol, side, price, qty, status, event_type, source, meta_json, trade_mode)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (position_id, symbol, side, float(price), float(qty), status, normalized_event_type, source, meta_json),
+            (position_id, symbol, side, float(price), float(qty), status, normalized_event_type, source, meta_json, trade_mode),
         )
         conn.commit()
 
@@ -414,10 +415,9 @@ def get_order_history(
         end_time=end_time,
         time_column="created_at",
     )
-    if trade_mode == "live":
-        extra = "source = 'live'"
-    elif trade_mode == "paper":
-        extra = "source != 'live'"
+    if trade_mode:
+        extra = "trade_mode = ?"
+        params.append(trade_mode)
     else:
         extra = ""
     if extra:

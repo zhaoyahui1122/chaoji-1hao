@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 import json
 from typing import Any
@@ -7,6 +8,7 @@ from typing import Any
 from app.core.log_config import get_logger
 from app.core.state import PAPER_BROKER, get_broker
 from app.services.market_data import get_ohlcv, MarketDataUnavailableError
+from app.services.notify_service import notify_guard_halt, notify_error, notify_open, notify_close
 from app.services.runner_log_store import append_log, load_logs
 from app.services.runner_risk_controls import evaluate_runner_guards
 from app.services.runner_state_store import load_runner_state, save_runner_state
@@ -146,6 +148,7 @@ def _close_position_from_trigger(
     candle_high: float,
     candle_low: float,
     broker: Any = None,
+    trade_mode: str = "paper",
 ) -> dict[str, Any]:
     if broker is None:
         broker = PAPER_BROKER
@@ -165,7 +168,10 @@ def _close_position_from_trigger(
             "trigger_basis": "candle_range",
         },
     )
-    logger.info("[%s] close %s @ %s (reason=%s, pnl=%.2f)", symbol, existing.side, trigger_price, close_reason, result.get("pnl", 0))
+    pnl = result.get("pnl", 0)
+    logger.info("[%s] close @ %s (reason=%s, pnl=%.2f)", symbol, trigger_price, close_reason, pnl)
+    if trade_mode == "live" and result.get("ok"):
+        notify_close(symbol, close_reason, trigger_price, 0, pnl, close_reason)
     return {
         "ok": True,
         "symbol": symbol,
@@ -196,9 +202,31 @@ def _save_and_return(config: dict[str, Any], payload: dict[str, Any]) -> dict[st
     return payload
 
 
+def _prefetch_symbol_data(symbol: str, strategy_type: str, data_source: str, timeframe: str) -> dict[str, Any] | None:
+    """Pre-fetch market data for a single symbol. Returns data dict or None on failure."""
+    try:
+        if strategy_type == "ict":
+            df_15m, market_meta = get_ohlcv(symbol, "15m", source=data_source)
+            df_1h, _ = get_ohlcv(symbol, "1h", source=data_source)
+            df_4h, _ = get_ohlcv(symbol, "4h", source=data_source)
+            if df_15m.empty or df_1h.empty or df_4h.empty:
+                return None
+            return {"df_15m": df_15m, "df_1h": df_1h, "df_4h": df_4h, "market_meta": market_meta}
+        else:
+            df, market_meta = get_ohlcv(symbol, timeframe, source=data_source)
+            if df.empty:
+                return None
+            return {"df": df, "market_meta": market_meta}
+    except MarketDataUnavailableError:
+        return None
+    except Exception:
+        return None
+
+
 def run_strategy_cycle(config: dict[str, Any]) -> dict[str, Any]:
     state = load_runner_state()
-    guard = evaluate_runner_guards()
+    trade_mode = config.get("trade_mode", "paper")
+    guard = evaluate_runner_guards(trade_mode=trade_mode)
 
     if state.get("manual_resume_required") and guard["allowed"]:
         state["manual_resume_required"] = False
@@ -210,6 +238,7 @@ def run_strategy_cycle(config: dict[str, Any]) -> dict[str, Any]:
         logger.warning("Runner halted: %s", guard["halt_reason"])
         payload = {"ok": False, "action": "halted", "reason": guard["halt_reason"], "guard": guard}
         append_log({"ts": datetime.utcnow().isoformat(), "config": config, "result": payload})
+        notify_guard_halt(guard["halt_reason"], guard.get("consecutive_loss_count", 0))
         save_runner_state({
             **state,
             "last_run_at": datetime.utcnow().isoformat(),
@@ -218,7 +247,7 @@ def run_strategy_cycle(config: dict[str, Any]) -> dict[str, Any]:
             "last_config": config,
             "halt_reason": guard["halt_reason"],
             "manual_resume_required": True,
-            # 保持 enabled，让前端知道机器人是“被暂停”而不是“未启动”
+            # 保持 enabled，让前端知道机器人是"被暂停"而不是"未启动"
             "is_running": False,
             "enabled": True,
         })
@@ -236,8 +265,15 @@ def run_strategy_cycle(config: dict[str, Any]) -> dict[str, Any]:
     fee_rate = float(config.get("fee_rate", 0.00015))
     slippage_rate = float(config.get("slippage_rate", 0.0001))
     strategy_type = config.get("strategy_type", "classic")
-    trade_mode = config.get("trade_mode", "paper")
     broker = get_broker(trade_mode)
+
+    # Sync live positions from exchange before each cycle (handles restart recovery)
+    if trade_mode == "live":
+        try:
+            live_positions = broker.sync_positions()
+            logger.info("[LIVE-SYNC] Synced %d positions from Gate.io", len(live_positions))
+        except Exception as exc:
+            logger.error("[LIVE-SYNC] Failed to sync positions: %s", exc)
 
     save_runner_state({
         **state,
@@ -251,9 +287,39 @@ def run_strategy_cycle(config: dict[str, Any]) -> dict[str, Any]:
     })
 
     try:
+        # Phase 1: Parallel data fetch for all symbols
+        data_map: dict[str, dict[str, Any] | None] = {}
+        if len(symbols) > 1:
+            with ThreadPoolExecutor(max_workers=len(symbols)) as executor:
+                futures = {
+                    executor.submit(_prefetch_symbol_data, sym, strategy_type, data_source, timeframe): sym
+                    for sym in symbols
+                }
+                for future in as_completed(futures, timeout=30):
+                    sym = futures[future]
+                    try:
+                        data_map[sym] = future.result(timeout=15)
+                    except Exception as exc:
+                        logger.warning("[%s] Data prefetch failed: %s", sym, exc)
+                        data_map[sym] = None
+        else:
+            data_map[symbols[0]] = _prefetch_symbol_data(symbols[0], strategy_type, data_source, timeframe)
+
+        # Phase 2: Serial trade execution (broker operations are not thread-safe)
         per_symbol_results: list[dict[str, Any]] = []
         for current_symbol in symbols:
             symbol_config = {**config, "symbol": current_symbol}
+            pre_fetched = data_map.get(current_symbol)
+            if pre_fetched is None:
+                per_symbol_results.append({
+                    "ok": True,
+                    "symbol": current_symbol,
+                    "action": "skip_data_unavailable",
+                    "reason": "prefetch_timeout_or_unavailable",
+                    "guard": guard,
+                    "market_data": {"requested_source": data_source, "actual_source": "unavailable"},
+                })
+                continue
             result = _run_single_symbol_cycle(
                 symbol=current_symbol,
                 config=symbol_config,
@@ -269,6 +335,7 @@ def run_strategy_cycle(config: dict[str, Any]) -> dict[str, Any]:
                 slippage_rate=slippage_rate,
                 strategy_type=strategy_type,
                 broker=broker,
+                pre_fetched_data=pre_fetched,
             )
             per_symbol_results.append(result)
 
@@ -291,6 +358,7 @@ def run_strategy_cycle(config: dict[str, Any]) -> dict[str, Any]:
         logger.error("Runner cycle error: %s", exc, exc_info=True)
         payload = {"ok": False, "action": "error", "reason": str(exc)}
         append_log({"ts": datetime.utcnow().isoformat(), "config": config, "result": payload})
+        notify_error("runner_cycle", str(exc))
         save_runner_state({
             **load_runner_state(),
             "is_running": False,
@@ -318,28 +386,35 @@ def _run_single_symbol_cycle(
     slippage_rate: float,
     strategy_type: str,
     broker: Any = None,
+    pre_fetched_data: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if broker is None:
         broker = PAPER_BROKER
 
     # ---- ICT 策略：多 timeframe 数据拉取 ----
     if strategy_type == "ict":
-        try:
-            df_15m, market_meta = get_ohlcv(symbol, "15m", source=data_source)
-            df_1h, _ = get_ohlcv(symbol, "1h", source=data_source)
-            df_4h, _ = get_ohlcv(symbol, "4h", source=data_source)
-        except MarketDataUnavailableError as exc:
-            logger.warning("[%s] Market data unavailable: %s", symbol, exc)
-            return {
-                "ok": True,
-                "symbol": symbol,
-                "action": "skip_data_unavailable",
-                "reason": str(exc),
-                "guard": guard,
-                "market_data": {"requested_source": data_source, "actual_source": "unavailable"},
-            }
-        if df_15m.empty or df_1h.empty or df_4h.empty:
-            return {"ok": False, "symbol": symbol, "reason": "no_market_data", "market_data": market_meta}
+        if pre_fetched_data:
+            df_15m = pre_fetched_data["df_15m"]
+            df_1h = pre_fetched_data["df_1h"]
+            df_4h = pre_fetched_data["df_4h"]
+            market_meta = pre_fetched_data.get("market_meta", {})
+        else:
+            try:
+                df_15m, market_meta = get_ohlcv(symbol, "15m", source=data_source)
+                df_1h, _ = get_ohlcv(symbol, "1h", source=data_source)
+                df_4h, _ = get_ohlcv(symbol, "4h", source=data_source)
+            except MarketDataUnavailableError as exc:
+                logger.warning("[%s] Market data unavailable: %s", symbol, exc)
+                return {
+                    "ok": True,
+                    "symbol": symbol,
+                    "action": "skip_data_unavailable",
+                    "reason": str(exc),
+                    "guard": guard,
+                    "market_data": {"requested_source": data_source, "actual_source": "unavailable"},
+                }
+            if df_15m.empty or df_1h.empty or df_4h.empty:
+                return {"ok": False, "symbol": symbol, "reason": "no_market_data", "market_data": market_meta}
 
         last_row = df_15m.iloc[-1]
         price = float(last_row["close"])
@@ -351,6 +426,7 @@ def _run_single_symbol_cycle(
         lookback_eng_bars = int(config.get("ict_lookback_eng_bars", 200))
         min_fvg_width_pct = float(config.get("ict_min_fvg_width_pct", 0.0))
         require_trend = bool(config.get("ict_require_trend", False))
+        fvg_max_bars = int(config.get("ict_fvg_max_bars", 100))
         signal, extra_meta = ict_generate_signal(
             df_4h, df_1h, df_15m,
             bos_lookback=bos_lookback,
@@ -358,24 +434,29 @@ def _run_single_symbol_cycle(
             lookback_eng_bars=lookback_eng_bars,
             min_fvg_width_pct=min_fvg_width_pct,
             require_trend=require_trend,
+            fvg_max_bars=fvg_max_bars,
         )
 
     # ---- 经典 / 海龟：单 timeframe ----
     else:
-        try:
-            df, market_meta = get_ohlcv(symbol, timeframe, source=data_source)
-        except MarketDataUnavailableError as exc:
-            logger.warning("[%s] Market data unavailable: %s", symbol, exc)
-            return {
-                "ok": True,
-                "symbol": symbol,
-                "action": "skip_data_unavailable",
-                "reason": str(exc),
-                "guard": guard,
-                "market_data": {"requested_source": data_source, "actual_source": "unavailable"},
-            }
-        if df.empty:
-            return {"ok": False, "symbol": symbol, "reason": "no_market_data", "market_data": market_meta}
+        if pre_fetched_data:
+            df = pre_fetched_data["df"]
+            market_meta = pre_fetched_data.get("market_meta", {})
+        else:
+            try:
+                df, market_meta = get_ohlcv(symbol, timeframe, source=data_source)
+            except MarketDataUnavailableError as exc:
+                logger.warning("[%s] Market data unavailable: %s", symbol, exc)
+                return {
+                    "ok": True,
+                    "symbol": symbol,
+                    "action": "skip_data_unavailable",
+                    "reason": str(exc),
+                    "guard": guard,
+                    "market_data": {"requested_source": data_source, "actual_source": "unavailable"},
+                }
+            if df.empty:
+                return {"ok": False, "symbol": symbol, "reason": "no_market_data", "market_data": market_meta}
 
         last_row = df.iloc[-1]
         price = float(last_row["close"])
@@ -408,10 +489,12 @@ def _run_single_symbol_cycle(
                     "threshold": threshold,
                 },
             }
-        broker.close_position(
+        close_result = broker.close_position(
             symbol, price, source="runner",
             meta={"runner": True, "strategy_type": strategy_type, "close_reason": "reverse_signal", "signal": signal},
         )
+        if config.get("trade_mode") == "live" and close_result.get("ok"):
+            notify_close(symbol, existing.side, close_result.get("execution_price", price), existing.qty, close_result.get("pnl", 0), "reverse_signal")
         existing = None
 
     if strategy_type == "turtle" and existing is not None:
@@ -422,6 +505,8 @@ def _run_single_symbol_cycle(
                 symbol, price, source="runner",
                 meta={"runner": True, "strategy_type": strategy_type, "close_reason": "turtle_exit", "turtle_signal": turtle_sig},
             )
+            if config.get("trade_mode") == "live" and result.get("ok"):
+                notify_close(symbol, existing.side, result.get("execution_price", price), existing.qty, result.get("pnl", 0), "turtle_exit")
             return {
                 "ok": True, "symbol": symbol, "action": "close", "close_reason": "turtle_exit",
                 "signal": turtle_sig, "price": price, "result": result, "guard": guard, "market_data": market_meta,
@@ -430,12 +515,14 @@ def _run_single_symbol_cycle(
     if signal in ("long", "short") and existing is None:
         if strategy_type == "turtle" and extra_meta and extra_meta.get("atr", 0) > 0:
             atr = extra_meta["atr"]
+            sl_mult = float(config.get("turtle_sl_atr_multiplier", 2.0))
+            tp_mult = float(config.get("turtle_tp_atr_multiplier", 3.0))
             if signal == "long":
-                sl_price = price - 2 * atr
-                tp_price = price + 3 * atr
+                sl_price = price - sl_mult * atr
+                tp_price = price + tp_mult * atr
             else:
-                sl_price = price + 2 * atr
-                tp_price = price - 3 * atr
+                sl_price = price + sl_mult * atr
+                tp_price = price - tp_mult * atr
             sizing = build_risk_sized_order(
                 side=signal, account_equity=broker.equity, entry_price=price,
                 leverage=leverage, risk_per_trade_pct=risk_per_trade_pct,
@@ -485,6 +572,9 @@ def _run_single_symbol_cycle(
         )
         action = "open" if result.get("ok") else "rejected"
         logger.info("[%s] %s %s @ %s (margin=%.0f, sl=%.1f)", symbol, action, signal, price, effective_allocated_margin, sizing["stop_loss_price"])
+        if config.get("trade_mode") == "live" and result.get("ok"):
+            exec_price = result.get("execution_price_actual", price)
+            notify_open(symbol, signal, exec_price, explicit_qty, leverage)
         return {
             "ok": True, "symbol": symbol, "action": action, "signal": signal, "price": price,
             "result": result, "guard": guard, "market_data": market_meta,
@@ -520,6 +610,7 @@ def _run_single_symbol_cycle(
                 candle_high=candle_high,
                 candle_low=candle_low,
                 broker=broker,
+                trade_mode=config.get("trade_mode", "paper"),
             )
 
         return {
@@ -539,7 +630,8 @@ def get_runner_logs() -> list[dict[str, Any]]:
 
 def get_runner_status() -> dict[str, Any]:
     state = load_runner_state()
-    state["guard"] = evaluate_runner_guards()
+    trade_mode = state.get("trade_mode", "paper")
+    state["guard"] = evaluate_runner_guards(trade_mode=trade_mode)
     state["last_run_config"] = state.get("last_config")
     state["current_strategy_config"] = load_strategy_config(state.get("last_config") or {})
     if state.get("selected_symbols"):

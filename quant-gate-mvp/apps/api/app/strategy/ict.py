@@ -39,15 +39,15 @@ def _get_trend_bos(df_4h: pd.DataFrame, lookback: int = 20) -> list[str]:
 # 2. FVG 识别（1小时级别）
 # ============================================================
 
-def _find_fvg(df: pd.DataFrame) -> list[dict[str, Any]]:
-    """识别1小时FVG（公允价值缺口）。"""
-    fvg_list = []
+def _find_fvg(df: pd.DataFrame, max_bars: int = 100) -> list[dict[str, Any]]:
+    """识别1小时FVG（公允价值缺口），标记已回补和过期的FVG。"""
+    raw_fvgs = []
     for i in range(1, len(df) - 1):
         prev = df.iloc[i - 1]
         curr = df.iloc[i]
         nxt = df.iloc[i + 1]
         if nxt["low"] > prev["high"]:
-            fvg_list.append({
+            raw_fvgs.append({
                 "type": "bullish",
                 "top": float(nxt["low"]),
                 "bottom": float(prev["high"]),
@@ -55,13 +55,33 @@ def _find_fvg(df: pd.DataFrame) -> list[dict[str, Any]]:
                 "time": df.iloc[i].get("timestamp", df.index[i]),
             })
         elif nxt["high"] < prev["low"]:
-            fvg_list.append({
+            raw_fvgs.append({
                 "type": "bearish",
                 "top": float(prev["low"]),
                 "bottom": float(nxt["high"]),
                 "index": i,
                 "time": df.iloc[i].get("timestamp", df.index[i]),
             })
+
+    # 检查每个 FVG 是否已被 fill，标记 filled 字段
+    n = len(df)
+    for fvg in raw_fvgs:
+        filled = False
+        for j in range(fvg["index"] + 2, n):
+            candle = df.iloc[j]
+            if fvg["type"] == "bullish" and candle["low"] <= fvg["bottom"]:
+                filled = True
+                break
+            if fvg["type"] == "bearish" and candle["high"] >= fvg["top"]:
+                filled = True
+                break
+        fvg["filled"] = filled
+
+    # 过滤：跳过已 fill 的和过期的
+    fvg_list = [
+        fvg for fvg in raw_fvgs
+        if not fvg["filled"] and (n - 1 - fvg["index"]) <= max_bars
+    ]
     return fvg_list
 
 
@@ -128,6 +148,7 @@ def generate_signal(
     lookback_eng_bars: int = 200,
     min_fvg_width_pct: float = 0.0,
     require_trend: bool = False,
+    fvg_max_bars: int = 100,
 ) -> tuple[str | None, dict[str, Any] | None]:
     """
     三周期组合信号生成。
@@ -151,7 +172,7 @@ def generate_signal(
         return None, None
 
     # 2. 识别FVG和吞没
-    fvg_list = _find_fvg(df_1h)
+    fvg_list = _find_fvg(df_1h, max_bars=fvg_max_bars)
     eng_list = _find_engulfing(df_15m)
 
     if not fvg_list or not eng_list:
