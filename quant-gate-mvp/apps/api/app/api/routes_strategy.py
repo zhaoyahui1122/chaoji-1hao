@@ -53,7 +53,7 @@ class StrategyConfig(BaseModel):
     turtle_exit_period: int = Field(default=10, ge=2, le=50)
     turtle_atr_period: int = Field(default=14, ge=2, le=100)
     turtle_atr_filter: float = Field(default=0.0, ge=0.0)
-    ict_bos_lookback: int = Field(default=20, ge=5, le=100)
+    ict_bos_lookback: int = Field(default=10, ge=5, le=100)
     ict_risk_reward: float = Field(default=2.5, ge=1.0, le=5.0)
     ict_lookback_eng_bars: int = Field(default=200, ge=1, le=500)
     ict_min_fvg_width_pct: float = Field(default=0.0, ge=0.0, le=0.01)

@@ -124,7 +124,7 @@ def export_summary(mode: Literal["paper", "live"] = "paper"):
         "win_rate": round(wins / total, 4) if total else 0.0,
         "total_pnl": round(total_pnl, 2),
         "total_fees": round(total_fees, 2),
-        "net_pnl": round(total_pnl - total_fees, 2),
+        "net_pnl": round(total_pnl, 2),
         "profit_factor": round(profit_factor, 2),
         "max_consecutive_losses": max_consecutive_loss,
         "avg_win": round(sum(avg_win) / len(avg_win), 2) if avg_win else 0.0,

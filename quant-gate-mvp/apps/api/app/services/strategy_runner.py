@@ -422,11 +422,12 @@ def _run_single_symbol_cycle(
         candle_low = float(last_row["low"])
 
         bos_lookback = int(config.get("ict_bos_lookback", 20))
-        risk_reward = float(config.get("ict_risk_reward", 2.0))
-        lookback_eng_bars = int(config.get("ict_lookback_eng_bars", 200))
+        risk_reward = float(config.get("ict_risk_reward", 2.5))
+        lookback_eng_bars = int(config.get("ict_lookback_eng_bars", 80))
         min_fvg_width_pct = float(config.get("ict_min_fvg_width_pct", 0.0))
-        require_trend = bool(config.get("ict_require_trend", False))
+        require_trend = bool(config.get("ict_require_trend", True))
         fvg_max_bars = int(config.get("ict_fvg_max_bars", 100))
+        fvg_tolerance_pct = float(config.get("ict_fvg_tolerance_pct", 0.03))
         signal, extra_meta = ict_generate_signal(
             df_4h, df_1h, df_15m,
             bos_lookback=bos_lookback,
@@ -435,6 +436,7 @@ def _run_single_symbol_cycle(
             min_fvg_width_pct=min_fvg_width_pct,
             require_trend=require_trend,
             fvg_max_bars=fvg_max_bars,
+            fvg_tolerance_pct=fvg_tolerance_pct,
         )
 
     # ---- 经典 / 海龟：单 timeframe ----

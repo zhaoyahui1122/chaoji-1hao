@@ -76,12 +76,14 @@ class BacktestRequest(BaseModel):
     risk_per_trade_pct: float = Field(default=0.01, gt=0, le=0.1)
 
     # ICT-specific params
-    ict_bos_lookback: int = Field(default=20, ge=5, le=100)
+    ict_bos_lookback: int = Field(default=10, ge=5, le=100)
     ict_risk_reward: float = Field(default=2.5, ge=0.5, le=10.0)
     ict_cooldown_bars: int = Field(default=0, ge=0, le=100)
-    ict_lookback_eng_bars: int = Field(default=200, ge=1, le=500)
+    ict_lookback_eng_bars: int = Field(default=80, ge=1, le=500)
     ict_min_fvg_width_pct: float = Field(default=0.0, ge=0.0, le=0.01)
-    ict_require_trend: bool = Field(default=False)
+    ict_require_trend: bool = Field(default=True)
+    ict_fvg_max_bars: int = Field(default=100, ge=10, le=500)
+    ict_fvg_tolerance_pct: float = Field(default=0.03, ge=0.0, le=0.1)
 
 
 class BacktestSummary(BaseModel):

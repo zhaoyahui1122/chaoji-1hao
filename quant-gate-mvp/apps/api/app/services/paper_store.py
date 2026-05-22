@@ -495,7 +495,8 @@ def get_history_stats(trade_mode: str | None = None) -> dict[str, Any]:
     avg_slippage_cost = total_slippage_cost / total_trades if total_trades else 0.0
     win_rate = len(wins) / total_trades if total_trades else 0.0
     max_profit = max((float(p.get("realized_pnl") or 0) for p in closed_positions), default=0.0)
-    max_loss = min((float(p.get("realized_pnl") or 0) for p in closed_positions), default=0.0)
+    loss_pnls = [float(p.get("realized_pnl") or 0) for p in closed_positions if float(p.get("realized_pnl") or 0) < 0]
+    max_loss = abs(min(loss_pnls)) if loss_pnls else 0.0
 
     peak = None
     max_drawdown = 0.0

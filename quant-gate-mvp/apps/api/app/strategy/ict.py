@@ -39,7 +39,7 @@ def _get_trend_bos(df_4h: pd.DataFrame, lookback: int = 20) -> list[str]:
 # 2. FVG 识别（1小时级别）
 # ============================================================
 
-def _find_fvg(df: pd.DataFrame, max_bars: int = 100) -> list[dict[str, Any]]:
+def _find_fvg(df: pd.DataFrame, max_bars: int = 100, skip_filled: bool = True) -> list[dict[str, Any]]:
     """识别1小时FVG（公允价值缺口），标记已回补和过期的FVG。"""
     raw_fvgs = []
     for i in range(1, len(df) - 1):
@@ -77,11 +77,17 @@ def _find_fvg(df: pd.DataFrame, max_bars: int = 100) -> list[dict[str, Any]]:
                 break
         fvg["filled"] = filled
 
-    # 过滤：跳过已 fill 的和过期的
-    fvg_list = [
-        fvg for fvg in raw_fvgs
-        if not fvg["filled"] and (n - 1 - fvg["index"]) <= max_bars
-    ]
+    # 过滤
+    if skip_filled:
+        fvg_list = [
+            fvg for fvg in raw_fvgs
+            if not fvg["filled"] and (n - 1 - fvg["index"]) <= max_bars
+        ]
+    else:
+        fvg_list = [
+            fvg for fvg in raw_fvgs
+            if (n - 1 - fvg["index"]) <= max_bars
+        ]
     return fvg_list
 
 
@@ -148,7 +154,8 @@ def generate_signal(
     lookback_eng_bars: int = 80,
     min_fvg_width_pct: float = 0.0,
     require_trend: bool = True,
-    fvg_max_bars: int = 60,
+    fvg_max_bars: int = 100,
+    fvg_tolerance_pct: float = 0.03,
 ) -> tuple[str | None, dict[str, Any] | None]:
     """
     三周期组合信号生成。
@@ -187,11 +194,12 @@ def generate_signal(
         fvg_width = abs(fvg["top"] - fvg["bottom"])
         if fvg_width < current_price * min_fvg_width_pct:
             continue
-        if fvg["type"] == "bullish" and fvg["bottom"] <= current_price <= fvg["top"]:
+        tol = current_price * fvg_tolerance_pct
+        if fvg["type"] == "bullish" and (fvg["bottom"] - tol) <= current_price <= (fvg["top"] + tol):
             matched_fvg = fvg
             signal_dir = "long"
             break
-        elif fvg["type"] == "bearish" and fvg["bottom"] <= current_price <= fvg["top"]:
+        elif fvg["type"] == "bearish" and (fvg["bottom"] - tol) <= current_price <= (fvg["top"] + tol):
             matched_fvg = fvg
             signal_dir = "short"
             break

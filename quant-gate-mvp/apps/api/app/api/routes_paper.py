@@ -56,6 +56,11 @@ def reset_paper_custom(payload: ResetPaperRequest):
     return PAPER_BROKER.reset(initial_balance=payload.initial_balance)
 
 
+@router.get("/snapshot")
+def paper_snapshot():
+    return PAPER_BROKER.snapshot()
+
+
 @router.post("/order")
 def place_order(payload: PlaceOrderRequest):
     explicit_qty = payload.qty
