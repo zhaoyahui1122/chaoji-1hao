@@ -341,70 +341,88 @@ class SimpleBacktester:
         return self._build_result(trades, equity_curve)
 
     def _run_ict(self, df_15m: pd.DataFrame, df_1h: pd.DataFrame, df_4h: pd.DataFrame, config: dict[str, Any]) -> BacktestResult:
-        """ICT 三周期回测：4h BOS 趋势 + 1h FVG + 15m 吞没入场。"""
+        """ICT 三周期回测：与 ict.py generate_signal 逻辑一致。"""
         bos_lookback = int(config.get("ict_bos_lookback", 20))
         risk_reward = float(config.get("ict_risk_reward", 2.5))
         fee_rate = float(config.get("fee_rate", 0.00015))
         slippage_rate = float(config.get("slippage_rate", 0.0001))
         risk_per_trade_pct = float(config.get("risk_per_trade_pct", 0.01))
         cooldown_bars = int(config.get("ict_cooldown_bars", 0))
-        lookback_eng_bars = int(config.get("ict_lookback_eng_bars", 200))
+        lookback_eng_bars = int(config.get("ict_lookback_eng_bars", 80))
         min_fvg_width_pct = float(config.get("ict_min_fvg_width_pct", 0.0))
+        require_trend = bool(config.get("ict_require_trend", True))
+        fvg_max_bars = int(config.get("ict_fvg_max_bars", 100))
 
-        # 预计算
+        # 预计算（复用 ict.py 的辅助函数）
         trend_list = _get_trend_bos(df_4h, lookback=bos_lookback)
-        fvg_list = _find_fvg(df_1h)
+        # 不传 max_bars，拿所有未回填的 FVG；回测中由每根 bar 自己判断回看距离
+        fvg_list = _find_fvg(df_1h, max_bars=len(df_1h))
         eng_list = _find_engulfing(df_15m)
 
-        # 构建 4h 趋势 lookup：对每个 15m bar 找到对应 4h 趋势
-        # 统一转为字符串比较（Gate timestamp 是整数秒，mock 是 ISO 字符串）
+        # 时间戳统一
         ts_4h = pd.to_datetime(df_4h["timestamp"], unit="s", errors="coerce").fillna(pd.to_datetime(df_4h["timestamp"])).astype(str)
         ts_15m = pd.to_datetime(df_15m["timestamp"], unit="s", errors="coerce").fillna(pd.to_datetime(df_15m["timestamp"])).astype(str)
 
-        # 将 FVG 和 engulfing 的 time 也统一为字符串
         for fvg in fvg_list:
             fvg["time"] = str(pd.to_datetime(fvg["time"], unit="s", errors="coerce") if isinstance(fvg["time"], (int, float)) else pd.to_datetime(fvg["time"]))
         for eng in eng_list:
             eng["time"] = str(pd.to_datetime(eng["time"], unit="s", errors="coerce") if isinstance(eng["time"], (int, float)) else pd.to_datetime(eng["time"]))
-        fvg_sorted = sorted(fvg_list, key=lambda x: x["time"])
+
+        # 4h 趋势 → 15m bar 映射
         trend_at_bar: list[str] = []
         j = 0
         for i in range(len(df_15m)):
-            # 推进 4h 指针到 <= 当前 15m 时间的最大 4h bar
             while j + 1 < len(ts_4h) and ts_4h.iloc[j + 1] <= ts_15m.iloc[i]:
                 j += 1
             trend_at_bar.append(trend_list[j] if j < len(trend_list) else "neutral")
 
-        # 吞没 pattern 时间索引
-        eng_times = {e["time"] for e in eng_list}
-        eng_by_time = {e["time"]: e for e in eng_list}
-
-        # 吞没时间 → 15m bar 索引映射（用于冷却和近期过滤）
+        # 吞没 → 15m bar 索引映射
+        eng_times_set = {e["time"] for e in eng_list}
         eng_time_to_bar: dict[str, int] = {}
         for idx in range(len(df_15m)):
             bar_ts = ts_15m.iloc[idx]
-            if bar_ts in eng_times:
+            if bar_ts in eng_times_set:
                 eng_time_to_bar[bar_ts] = idx
 
-        # FVG 时间列表（已排序）
+        # FVG → 15m bar 索引映射
+        fvg_time_to_bar: dict[str, int] = {}
+        for fvg in fvg_list:
+            for idx in range(len(df_15m)):
+                if ts_15m.iloc[idx] >= fvg["time"]:
+                    fvg_time_to_bar[fvg["time"]] = idx
+                    break
+
+        # 1h 时间索引（用于 FVG 回看距离）
+        ts_1h = pd.to_datetime(df_1h["timestamp"], unit="s", errors="coerce").fillna(pd.to_datetime(df_1h["timestamp"])).astype(str)
+        fvg_1h_bar: dict[str, int] = {}
+        for fvg in fvg_list:
+            for idx in range(len(ts_1h)):
+                if ts_1h.iloc[idx] >= fvg["time"]:
+                    fvg_1h_bar[fvg["time"]] = idx
+                    break
 
         balance = self.initial_balance
         equity_curve: list[dict[str, Any]] = []
         trades: list[BacktestTrade] = []
         position = None
-        used_eng_time = None  # 避免同一吞没反复开仓
-        cooldown_until = -1  # 冷却期：关闭仓位后等待 N 根 K 线再开新仓
+        used_eng_time = None
+        cooldown_until = -1
+        k = 0  # 1h bar pointer
 
         for i in range(len(df_15m)):
             row = df_15m.iloc[i]
             price = float(row["close"])
-            ts = ts_15m.iloc[i]  # 已转为统一字符串格式
+            ts = ts_15m.iloc[i]
             current_trend = trend_at_bar[i]
+
+            # 推进 1h 指针
+            while k + 1 < len(ts_1h) and ts_1h.iloc[k + 1] <= ts:
+                k += 1
 
             # === 持仓管理 ===
             if position is not None:
                 exit_reason = None
-                is_long = position["side"] in ("long", "bullish")
+                is_long = position["side"] == "long"
                 if is_long:
                     if price <= position["stop_price"]:
                         exit_reason = "stop_loss"
@@ -423,7 +441,6 @@ class SimpleBacktester:
                     else:
                         exit_price = self._apply_slippage("short", price, slippage_rate, is_close=True)
                         gross_pnl = (position["entry_price"] - exit_price) * position["qty"]
-
                     exit_fee = self._calc_fee(exit_price * position["qty"], fee_rate)
                     total_fee = position["entry_fee"] + exit_fee
                     pnl = gross_pnl - total_fee
@@ -442,86 +459,100 @@ class SimpleBacktester:
                         pnl_pct=pnl_pct,
                         reason=exit_reason,
                         entry_slippage=position["entry_slippage"],
-                        exit_slippage=exit_price - price if position["side"] == "long" else price - exit_price,
+                        exit_slippage=exit_price - price if is_long else price - exit_price,
                         leverage=float(config.get("leverage", 1)),
                         status="closed",
                         cumulative_fees=total_fee,
-                        cumulative_slippage_cost=(position["entry_slippage"] + (exit_price - price if position["side"] == "long" else price - exit_price)) * position["qty"],
+                        cumulative_slippage_cost=(position["entry_slippage"] + (exit_price - price if is_long else price - exit_price)) * position["qty"],
                     ))
                     position = None
                     used_eng_time = None
                     cooldown_until = i + cooldown_bars
 
-            # === 开仓信号 ===
-            if position is None and current_trend != "neutral" and i > cooldown_until:
-                # 只看最近 N 根 K 线内的吞没（避免老信号反复使用）
-                recent_eng = None
-                for e in eng_list:
-                    if e["time"] <= ts and e["time"] != used_eng_time:
-                        # 检查吞没是否在最近 N 根 K 线内
-                        eng_bar_idx = eng_time_to_bar.get(e["time"], -1)
-                        if eng_bar_idx >= 0 and (i - eng_bar_idx) <= lookback_eng_bars:
-                            recent_eng = e
-                if recent_eng is not None and recent_eng["type"] == current_trend:
-                    # 找匹配的 FVG：在吞没之后、方向一致、close 在 FVG 范围内
-                    matched_fvg = None
-                    for fvg in fvg_sorted:
-                        if fvg["time"] <= recent_eng["time"]:
-                            continue
-                        if fvg["type"] != current_trend:
-                            continue
-                        if not (fvg["bottom"] <= recent_eng["close"] <= fvg["top"]):
-                            continue
-                        # FVG 质量过滤：最小宽度
-                        fvg_width = abs(fvg["top"] - fvg["bottom"])
-                        min_width = price * min_fvg_width_pct
-                        if fvg_width < min_width:
-                            continue
-                        # FVG 未被填充：当前价格仍在 FVG 同侧
-                        if current_trend == "bullish" and price < fvg["bottom"]:
-                            continue  # 价格已跌穿 FVG，缺口已回填
-                        if current_trend == "bearish" and price > fvg["top"]:
-                            continue  # 价格已涨穿 FVG，缺口已回填
+            # === 开仓信号（与 ict.py generate_signal 一致）===
+            if position is None and i > cooldown_until:
+                # 1. 遍历 FVG，找当前价格所在区域（从最新的开始）
+                matched_fvg = None
+                signal_dir = None
+                for fvg in reversed(fvg_list):
+                    fvg_bar_idx = fvg_time_to_bar.get(fvg["time"], -1)
+                    if fvg_bar_idx < 0 or fvg_bar_idx >= i:
+                        continue
+                    # FVG 回看距离：只看最近 fvg_max_bars 根 1h K 线内的
+                    fvg_1h_idx = fvg_1h_bar.get(fvg["time"], -1)
+                    if fvg_1h_idx < 0 or (k - fvg_1h_idx) > fvg_max_bars:
+                        continue
+                    fvg_width = abs(fvg["top"] - fvg["bottom"])
+                    if fvg_width < price * min_fvg_width_pct:
+                        continue
+                    if fvg["type"] == "bullish" and fvg["bottom"] <= price <= fvg["top"]:
                         matched_fvg = fvg
+                        signal_dir = "long"
+                        break
+                    elif fvg["type"] == "bearish" and fvg["bottom"] <= price <= fvg["top"]:
+                        matched_fvg = fvg
+                        signal_dir = "short"
                         break
 
-                    if matched_fvg is not None:
-                        slippage_side = "long" if recent_eng["type"] == "bullish" else "short"
-                        entry_price = self._apply_slippage(slippage_side, price, slippage_rate, is_close=False)
-                        if recent_eng["type"] == "bullish":
-                            stop_loss = matched_fvg["bottom"]
-                            sl_distance = entry_price - stop_loss
-                            take_profit = entry_price + sl_distance * risk_reward
-                        else:
-                            stop_loss = matched_fvg["top"]
-                            sl_distance = stop_loss - entry_price
-                            take_profit = entry_price - sl_distance * risk_reward
+                if matched_fvg is not None:
+                    # 2. 检查最近是否有同方向吞没确认
+                    latest_eng = None
+                    for eng in reversed(eng_list):
+                        eng_bar_idx = eng_time_to_bar.get(eng["time"], -1)
+                        if eng_bar_idx < 0 or eng_bar_idx >= i or (i - eng_bar_idx) > lookback_eng_bars:
+                            continue
+                        if eng["time"] == used_eng_time:
+                            continue
+                        if (signal_dir == "long" and eng["type"] == "bullish") or \
+                           (signal_dir == "short" and eng["type"] == "bearish"):
+                            latest_eng = eng
+                            break
 
-                        sizing = build_risk_sized_order(
-                            side=recent_eng["type"],
-                            account_equity=balance,
-                            entry_price=entry_price,
-                            leverage=1,
-                            risk_per_trade_pct=risk_per_trade_pct,
-                            stop_loss_pct=sl_distance / entry_price if entry_price > 0 else 0.02,
-                            take_profit_pct=(take_profit - entry_price) / entry_price if recent_eng["type"] == "bullish" and entry_price > 0 else (entry_price - take_profit) / entry_price if entry_price > 0 else 0.04,
-                            allocated_margin_cap=None,
-                        )
-                        qty = sizing["qty"]
-                        if qty > 0:
-                            entry_fee = self._calc_fee(entry_price * qty, fee_rate)
-                            balance -= entry_fee
-                            position = {
-                                "side": recent_eng["type"],
-                                "entry_time": ts,
-                                "entry_price": entry_price,
-                                "entry_fee": entry_fee,
-                                "entry_slippage": entry_price - price if slippage_side == "long" else price - entry_price,
-                                "qty": qty,
-                                "stop_price": stop_loss,
-                                "take_profit_price": take_profit,
-                            }
-                            used_eng_time = recent_eng["time"]
+                    if latest_eng is not None:
+                        # 3. 趋势过滤：只过滤明确逆势，neutral 允许开仓
+                        skip = False
+                        if require_trend and current_trend != "neutral":
+                            if (signal_dir == "long" and current_trend == "bearish") or \
+                               (signal_dir == "short" and current_trend == "bullish"):
+                                skip = True
+
+                        if not skip:
+                            # 4. 入场、止损、止盈
+                            entry_price = self._apply_slippage(signal_dir, price, slippage_rate, is_close=False)
+                            if signal_dir == "long":
+                                stop_loss = matched_fvg["bottom"]
+                                sl_distance = entry_price - stop_loss
+                                take_profit = entry_price + sl_distance * risk_reward
+                            else:
+                                stop_loss = matched_fvg["top"]
+                                sl_distance = stop_loss - entry_price
+                                take_profit = entry_price - sl_distance * risk_reward
+
+                            sizing = build_risk_sized_order(
+                                side=signal_dir,
+                                account_equity=balance,
+                                entry_price=entry_price,
+                                leverage=1,
+                                risk_per_trade_pct=risk_per_trade_pct,
+                                stop_loss_pct=sl_distance / entry_price if entry_price > 0 else 0.02,
+                                take_profit_pct=(take_profit - entry_price) / entry_price if signal_dir == "long" and entry_price > 0 else (entry_price - take_profit) / entry_price if entry_price > 0 else 0.04,
+                                allocated_margin_cap=None,
+                            )
+                            qty = sizing["qty"]
+                            if qty > 0:
+                                entry_fee = self._calc_fee(entry_price * qty, fee_rate)
+                                balance -= entry_fee
+                                position = {
+                                    "side": signal_dir,
+                                    "entry_time": ts,
+                                    "entry_price": entry_price,
+                                    "entry_fee": entry_fee,
+                                    "entry_slippage": entry_price - price if signal_dir == "long" else price - entry_price,
+                                    "qty": qty,
+                                    "stop_price": stop_loss,
+                                    "take_profit_price": take_profit,
+                                }
+                                used_eng_time = latest_eng["time"]
 
             # === 权益曲线 ===
             unrealized = 0.0
