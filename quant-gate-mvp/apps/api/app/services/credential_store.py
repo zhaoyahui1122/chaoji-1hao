@@ -15,6 +15,10 @@ _KEY_FILE = Path(__file__).resolve().parents[4] / "state" / ".cred_key"
 
 
 def _get_or_create_fernet() -> Fernet:
+    # Prefer environment variable (more secure than file)
+    env_key = os.environ.get("GATE_FERNET_KEY")
+    if env_key:
+        return Fernet(env_key.encode("utf-8"))
     if _KEY_FILE.exists():
         key = _KEY_FILE.read_bytes()
     else:

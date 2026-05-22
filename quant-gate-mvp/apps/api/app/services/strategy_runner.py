@@ -593,6 +593,14 @@ def _run_single_symbol_cycle(
             persist=False,
         )
         stop_loss_price, take_profit_price = _extract_position_targets(existing, stop_loss_pct, take_profit_pct, broker=broker)
+
+        # 实盘：同步更新交易所端止损单
+        if trade_mode == "live" and stop_loss_price and stop_loss_price > 0:
+            try:
+                broker.update_stop_loss(symbol, stop_loss_price)
+            except Exception:
+                pass  # non-blocking
+
         close_reason, trigger_price = _resolve_exit_trigger(existing, stop_loss_price, take_profit_price, candle_high, candle_low)
 
         if close_reason and trigger_price is not None:

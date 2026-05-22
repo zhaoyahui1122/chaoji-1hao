@@ -7,6 +7,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
+import requests
+
 from app.core.log_config import get_logger
 from app.services.gate_live_account import (
     _gate_private_request,
@@ -21,6 +23,27 @@ logger = get_logger(__name__)
 GATE_FUTURES_ORDERS_PATH = "/api/v4/futures/usdt/orders"
 GATE_FUTURES_POSITIONS_PATH = "/api/v4/futures/usdt/positions"
 GATE_FUTURES_PRICE_ORDERS_PATH = "/api/v4/futures/usdt/price_orders"
+GATE_CONTRACTS_PATH = "/api/v4/futures/usdt/contracts"
+
+_contract_cache: dict[str, float] = {}
+
+
+def _get_quanto_multiplier(contract: str) -> float:
+    """Fetch contract quanto_multiplier from Gate (cached)."""
+    cached = _contract_cache.get(contract)
+    if cached is not None:
+        return cached
+    try:
+        resp = requests.get(
+            f"https://api.gateio.ws{GATE_CONTRACTS_PATH}/{contract}",
+            timeout=10,
+        )
+        resp.raise_for_status()
+        multiplier = float(resp.json().get("quanto_multiplier", "1"))
+        _contract_cache[contract] = multiplier
+        return multiplier
+    except Exception:
+        return 1.0  # fallback: assume 1 USD per contract
 
 
 @dataclass
@@ -54,6 +77,8 @@ class GateLiveBroker:
         self._positions: list[LivePosition] = []
         self._orders: list[LiveOrder] = []
         self._last_sync: str | None = None
+        self._sl_order_ids: dict[str, str] = {}  # contract -> exchange SL order id
+        self._sl_prices: dict[str, float] = {}   # contract -> current SL price
 
     def _creds(self) -> tuple[str, str]:
         session = get_live_account_session()
@@ -158,7 +183,8 @@ class GateLiveBroker:
 
         # Calculate qty from allocated margin and leverage
         notional = allocated_margin * leverage
-        qty = max(1, int(notional / price))
+        quanto_multiplier = _get_quanto_multiplier(contract)
+        qty = max(1, int(notional / (price * quanto_multiplier)))
 
         # Gate: positive size = long, negative = short
         order_size = qty if side == "long" else -qty
@@ -246,7 +272,7 @@ class GateLiveBroker:
                         "price": str(stop_loss_price),
                         "rule": sl_rule,
                     },
-                    "order_type": "limit",
+                    "order_type": "market",
                 })
                 sl_result = _gate_private_request(
                     "POST",
@@ -256,6 +282,9 @@ class GateLiveBroker:
                     body=sl_body,
                 )
                 exchange_sl_order_id = str(sl_result.get("id", ""))
+                if exchange_sl_order_id:
+                    self._sl_order_ids[contract] = exchange_sl_order_id
+                    self._sl_prices[contract] = stop_loss_price
                 logger.info("[LIVE] Exchange SL placed: contract=%s trigger=%.1f id=%s", contract, stop_loss_price, exchange_sl_order_id)
             except Exception as sl_exc:
                 logger.warning("[LIVE] Exchange SL placement failed (non-blocking): %s", sl_exc)
@@ -379,6 +408,8 @@ class GateLiveBroker:
                 api_secret=api_secret,
             )
             logger.info("[LIVE] Cancelled conditional orders for %s", contract)
+            self._sl_order_ids.pop(contract, None)
+            self._sl_prices.pop(contract, None)
         except Exception as cancel_exc:
             logger.warning("[LIVE] Cancel conditional orders failed (non-blocking): %s", cancel_exc)
 
@@ -410,6 +441,75 @@ class GateLiveBroker:
                 return {"ok": True, "symbol": symbol, "mark_price": mark_price}
         return {"ok": False, "symbol": symbol, "error": "no_position"}
 
+    def update_stop_loss(
+        self,
+        symbol: str,
+        new_sl_price: float,
+        drift_threshold_pct: float = 0.005,
+    ) -> dict[str, Any]:
+        """Cancel old exchange SL and place a new one if the price has drifted enough."""
+        contract = symbol.upper()
+        old_sl = self._sl_prices.get(contract)
+        if old_sl is not None and old_sl > 0:
+            drift = abs(new_sl_price - old_sl) / old_sl
+            if drift < drift_threshold_pct:
+                return {"ok": True, "symbol": symbol, "action": "skip", "reason": "drift_below_threshold"}
+
+        api_key, api_secret = self._creds()
+
+        # Find position to know direction and size
+        target = next((p for p in self._positions if p.symbol == contract), None)
+        if target is None:
+            return {"ok": False, "symbol": symbol, "error": "no_position"}
+
+        # Cancel old conditional orders
+        try:
+            _gate_private_request(
+                "DELETE",
+                f"{GATE_FUTURES_PRICE_ORDERS_PATH}?contract={contract}&status=open",
+                api_key=api_key,
+                api_secret=api_secret,
+            )
+        except Exception:
+            pass
+
+        # Place new SL
+        try:
+            sl_size = -target.qty if target.side == "long" else target.qty
+            sl_rule = 1 if target.side == "long" else 2
+            sl_body = json.dumps({
+                "contract": contract,
+                "initial": {
+                    "contract": contract,
+                    "size": sl_size,
+                    "price": "0",
+                    "tif": "ioc",
+                    "close": True,
+                    "reduce_only": True,
+                },
+                "trigger": {
+                    "price": str(new_sl_price),
+                    "rule": sl_rule,
+                },
+                "order_type": "market",
+            })
+            sl_result = _gate_private_request(
+                "POST",
+                GATE_FUTURES_PRICE_ORDERS_PATH,
+                api_key=api_key,
+                api_secret=api_secret,
+                body=sl_body,
+            )
+            new_id = str(sl_result.get("id", ""))
+            if new_id:
+                self._sl_order_ids[contract] = new_id
+                self._sl_prices[contract] = new_sl_price
+            logger.info("[LIVE] SL updated: %s %.1f -> %.1f id=%s", contract, old_sl or 0, new_sl_price, new_id)
+            return {"ok": True, "symbol": symbol, "action": "updated", "old_sl": old_sl, "new_sl": new_sl_price, "order_id": new_id}
+        except Exception as exc:
+            logger.warning("[LIVE] SL update failed for %s: %s", contract, exc)
+            return {"ok": False, "symbol": symbol, "error": str(exc)}
+
     def snapshot(self) -> dict[str, Any]:
         """Return current account + positions snapshot."""
         self.sync_positions()
@@ -435,3 +535,5 @@ class GateLiveBroker:
         """Clear local cache (does NOT affect Gate positions)."""
         self._positions = []
         self._orders = []
+        self._sl_order_ids = {}
+        self._sl_prices = {}
