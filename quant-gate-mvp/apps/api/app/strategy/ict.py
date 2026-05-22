@@ -145,10 +145,10 @@ def generate_signal(
     df_15m: pd.DataFrame,
     bos_lookback: int = 20,
     risk_reward: float = 2.5,
-    lookback_eng_bars: int = 200,
+    lookback_eng_bars: int = 80,
     min_fvg_width_pct: float = 0.0,
-    require_trend: bool = False,
-    fvg_max_bars: int = 100,
+    require_trend: bool = True,
+    fvg_max_bars: int = 60,
 ) -> tuple[str | None, dict[str, Any] | None]:
     """
     三周期组合信号生成。
@@ -168,8 +168,6 @@ def generate_signal(
     if past_4h.empty:
         return None, None
     current_trend = past_4h.iloc[-1]["trend"]
-    if require_trend and current_trend == "neutral":
-        return None, None
 
     # 2. 识别FVG和吞没
     fvg_list = _find_fvg(df_1h, max_bars=fvg_max_bars)
@@ -178,56 +176,56 @@ def generate_signal(
     if not fvg_list or not eng_list:
         return None, None
 
-    # 3. 找最近 N 根 K 线内的吞没（避免老信号反复触发）
-    latest_eng = None
-    n = len(df_15m)
-    for eng in reversed(eng_list):
-        eng_idx = eng.get("index", -1)
-        if eng_idx >= 0 and (n - 1 - eng_idx) <= lookback_eng_bars:
-            latest_eng = eng
-            break
-
-    if latest_eng is None:
-        return None, None
-
-    eng_time = str(pd.to_datetime(latest_eng["time"]))
-    eng_close = latest_eng["close"]
-    eng_type = latest_eng["type"]
     current_price = float(df_15m.iloc[-1]["close"])
 
-    # 趋势过滤：可选只顺势交易
-    if require_trend and eng_type != current_trend:
-        return None, None
-
-    # 4. 匹配FVG：找吞没之后形成的、方向一致的FVG
-    signal_dir = eng_type  # 用吞没方向决定信号方向
+    # 3. FVG匹配：正确的ICT逻辑
+    # FVG先形成 → 价格回踩到FVG区域 → 吞没确认
     matched_fvg = None
-    for fvg in fvg_list:
-        fvg_time = str(pd.to_datetime(fvg["time"]))
-        if eng_time <= fvg_time:
-            continue
-        if fvg["type"] != signal_dir:
-            continue
-        if not (fvg["bottom"] <= eng_close <= fvg["top"]):
-            continue
-        # FVG 质量过滤：最小宽度
+    signal_dir = None
+    n = len(df_15m)
+    for fvg in reversed(fvg_list):
         fvg_width = abs(fvg["top"] - fvg["bottom"])
         if fvg_width < current_price * min_fvg_width_pct:
             continue
-        # FVG 未被填充：当前价格仍在 FVG 同侧
-        if signal_dir == "bullish" and current_price < fvg["bottom"]:
-            continue  # 价格已跌穿 FVG，缺口已回填
-        if signal_dir == "bearish" and current_price > fvg["top"]:
-            continue  # 价格已涨穿 FVG，缺口已回填
-        matched_fvg = fvg
-        break
+        if fvg["type"] == "bullish" and fvg["bottom"] <= current_price <= fvg["top"]:
+            matched_fvg = fvg
+            signal_dir = "long"
+            break
+        elif fvg["type"] == "bearish" and fvg["bottom"] <= current_price <= fvg["top"]:
+            matched_fvg = fvg
+            signal_dir = "short"
+            break
 
     if matched_fvg is None:
         return None, None
 
+    # 检查最近是否有同方向吞没确认
+    has_engulfing = False
+    latest_eng = None
+    for eng in reversed(eng_list):
+        eng_idx = eng.get("index", -1)
+        if eng_idx < 0 or (n - 1 - eng_idx) > lookback_eng_bars:
+            continue
+        if (signal_dir == "long" and eng["type"] == "bullish") or \
+           (signal_dir == "short" and eng["type"] == "bearish"):
+            has_engulfing = True
+            latest_eng = eng
+            break
+
+    if not has_engulfing:
+        return None, None
+
+    eng_close = latest_eng["close"]
+
+    # 趋势过滤：只过滤明确逆势，neutral允许开仓
+    if require_trend and current_trend != "neutral":
+        if (signal_dir == "long" and current_trend == "bearish") or \
+           (signal_dir == "short" and current_trend == "bullish"):
+            return None, None
+
     # 5. 计算入场、止损、止盈
-    entry = eng_close
-    if eng_type == "bullish":
+    entry = current_price
+    if signal_dir == "long":
         stop_loss = matched_fvg["bottom"]
         sl_distance = entry - stop_loss
         take_profit = entry + sl_distance * risk_reward
@@ -243,8 +241,8 @@ def generate_signal(
         "fvg_top": matched_fvg["top"],
         "fvg_bottom": matched_fvg["bottom"],
         "trend_4h": current_trend,
-        "ict_signal": eng_type,
+        "ict_signal": signal_dir,
         "entry_price": round(entry, 4),
     }
 
-    return eng_type, extra_meta
+    return signal_dir, extra_meta
