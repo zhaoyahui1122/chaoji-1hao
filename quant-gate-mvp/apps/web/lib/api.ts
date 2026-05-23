@@ -147,6 +147,7 @@ export type RunnerRequestPayload = {
   timeframe: Timeframe
   strategy_type: 'classic' | 'turtle' | 'ict'
   data_source: DataSource
+  trade_mode?: 'paper' | 'live'
   leverage: number
   allocated_margin: number
   use_boll?: boolean
@@ -608,6 +609,31 @@ export async function refreshLiveAccount(): Promise<LiveAccountStatus> {
   if (!res.ok) {
     const error = await res.json().catch(() => ({ detail: '刷新失败' }))
     throw new Error(error.detail || '刷新失败')
+  }
+  return res.json()
+}
+
+export async function closeLivePosition(symbol: string, position_id?: string): Promise<any> {
+  const res = await fetch(`${API_BASE}/live-account/close`, {
+    method: 'POST',
+    headers: apiHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify({ symbol, position_id }),
+  })
+  if (!res.ok) {
+    const error = await res.json().catch(() => ({ detail: '平仓失败' }))
+    throw new Error(error.detail || '平仓失败')
+  }
+  return res.json()
+}
+
+export async function closeAllLivePositions(): Promise<any> {
+  const res = await fetch(`${API_BASE}/live-account/close-all`, {
+    method: 'POST',
+    headers: apiHeaders(),
+  })
+  if (!res.ok) {
+    const error = await res.json().catch(() => ({ detail: '一键平仓失败' }))
+    throw new Error(error.detail || '一键平仓失败')
   }
   return res.json()
 }

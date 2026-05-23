@@ -57,10 +57,10 @@ class RunnerRequest(BaseModel):
     # ICT strategy params
     ict_bos_lookback: int = Field(default=10, ge=5, le=100)
     ict_risk_reward: float = Field(default=2.5, ge=1.0, le=5.0)
-    ict_lookback_eng_bars: int = Field(default=200, ge=1, le=500)
+    ict_lookback_eng_bars: int = Field(default=80, ge=1, le=500)
     ict_min_fvg_width_pct: float = Field(default=0.0, ge=0.0, le=0.01)
-    ict_cooldown_bars: int = Field(default=0, ge=0, le=100)
-    ict_require_trend: bool = Field(default=False)
+    ict_cooldown_bars: int = Field(default=4, ge=0, le=100)
+    ict_require_trend: bool = Field(default=True)
 
     # Adaptive strategy params (ADX + RSI mean reversion)
     turtle_adx_period: int = Field(default=14, ge=2, le=100)
@@ -74,7 +74,7 @@ class RunnerRequest(BaseModel):
 
     # Common risk params
     stop_loss_pct: float = Field(default=0.02, gt=0, le=0.5)
-    take_profit_pct: float = Field(default=0.04, gt=0, le=2.0)
+    take_profit_pct: float = Field(default=0.05, gt=0, le=2.0)
     risk_per_trade_pct: float = Field(default=0.01, gt=0, le=0.1)
     fee_rate: float = Field(default=0.00015, ge=0, le=0.01)
     slippage_rate: float = Field(default=0.0001, ge=0, le=0.01)

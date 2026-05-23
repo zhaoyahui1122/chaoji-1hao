@@ -347,7 +347,7 @@ class SimpleBacktester:
         fee_rate = float(config.get("fee_rate", 0.00015))
         slippage_rate = float(config.get("slippage_rate", 0.0001))
         risk_per_trade_pct = float(config.get("risk_per_trade_pct", 0.01))
-        cooldown_bars = int(config.get("ict_cooldown_bars", 0))
+        cooldown_bars = int(config.get("ict_cooldown_bars", 4))
         lookback_eng_bars = int(config.get("ict_lookback_eng_bars", 80))
         min_fvg_width_pct = float(config.get("ict_min_fvg_width_pct", 0.0))
         require_trend = bool(config.get("ict_require_trend", True))

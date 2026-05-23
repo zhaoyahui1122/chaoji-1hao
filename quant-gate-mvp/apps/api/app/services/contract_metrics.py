@@ -8,6 +8,14 @@ MAINTENANCE_MARGIN_RATIO = 0.005
 
 # ---- 回撤追踪 ----
 
+def reset_drawdown_tracker() -> None:
+    """重置回撤追踪器（模拟账户重置时调用）。"""
+    init_db()
+    with get_conn() as conn:
+        conn.execute("DELETE FROM drawdown_tracker WHERE id = 1")
+        conn.commit()
+
+
 def update_equity_peak(equity: float) -> dict[str, Any]:
     """更新权益峰值，计算当前回撤和最大回撤，返回回撤信息。"""
     init_db()

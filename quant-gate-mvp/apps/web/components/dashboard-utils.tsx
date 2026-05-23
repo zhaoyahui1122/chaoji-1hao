@@ -234,6 +234,36 @@ export function buildLiveAccountOverview(
   positions: DashboardData['positions'],
   marketTickers?: MarketTickers,
 ): DashboardData['account'] {
+  // 实盘模式：直接用 Gate.io 返回的账户数据
+  if (account.equity > 0 && positions.some((p) => (p as any).margin > 0)) {
+    const totalNotional = positions.reduce((sum, position) => {
+      const livePrice = resolveLivePositionPrice(position, marketTickers)
+      return sum + livePrice * position.qty
+    }, 0)
+    const marginUsed = positions.reduce((sum, position) => sum + ((position as any).margin ?? position.initial_margin ?? 0), 0)
+    const unrealizedPnl = positions.reduce((sum, position) => {
+      if (position.unrealized_pnl != null) return sum + position.unrealized_pnl
+      const livePrice = resolveLivePositionPrice(position, marketTickers)
+      const pnl = position.side === 'long'
+        ? (livePrice - position.entry_price) * position.qty
+        : (position.entry_price - livePrice) * position.qty
+      return sum + pnl
+    }, 0)
+    const equity = account.equity
+    return {
+      ...account,
+      equity,
+      available_balance: account.available_balance ?? equity - marginUsed,
+      margin_used: marginUsed,
+      margin_ratio: equity > 0 ? marginUsed / equity : 0,
+      unrealized_pnl: unrealizedPnl,
+      total_notional: totalNotional,
+      exposure_ratio: equity > 0 ? totalNotional / equity : 0,
+      open_positions: positions.length,
+    }
+  }
+
+  // 模拟模式：用公式计算
   const unrealizedPnl = positions.reduce((sum, position) => {
     const livePrice = resolveLivePositionPrice(position, marketTickers)
     const nextPnl = position.side === 'long'
@@ -255,8 +285,8 @@ export function buildLiveAccountOverview(
 
   const equity = account.realized_pnl + unrealizedPnl + (account.equity - account.realized_pnl - account.unrealized_pnl)
   const availableBalance = equity - marginUsed
-  const marginRatio = equity <= 0 ? 1 : marginUsed / equity
-  const exposureRatio = equity <= 0 ? 1 : totalNotional / equity
+  const marginRatio = equity > 0 ? marginUsed / equity : 0
+  const exposureRatio = equity > 0 ? totalNotional / equity : 0
 
   return {
     ...account,

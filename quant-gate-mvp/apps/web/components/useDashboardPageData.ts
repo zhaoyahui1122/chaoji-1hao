@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 
 import {
   addStrategySlot,
+  closeLivePosition,
   closePaperPosition,
   deleteStrategySlot,
   getDashboard,
@@ -141,6 +142,9 @@ export function useDashboardPageData() {
   async function reloadDashboard() {
     const dashboardData = await getDashboard()
     setDashboard(dashboardData)
+    // 自动同步历史筛选的 trade_mode
+    const dashMode = dashboardData.trade_mode || ''
+    setHistoryFilters((prev) => prev.trade_mode === dashMode ? prev : { ...prev, trade_mode: dashMode as any })
     return dashboardData
   }
 
@@ -263,6 +267,9 @@ export function useDashboardPageData() {
         const localPresets = await loadStrategyPresetsFromBackend(strategyData)
         const initialSlotId = localPresets[0]?.slotId || 1
         setDashboard(dashboardData)
+        // 自动同步历史筛选的 trade_mode
+        const dashMode = dashboardData.trade_mode || ''
+        setHistoryFilters((prev) => prev.trade_mode === dashMode ? prev : { ...prev, trade_mode: dashMode as any })
         setStrategy(strategyData)
         setStrategyPresets(localPresets)
         setSelectedStrategySlotId(loadSelectedStrategySlot(initialSlotId, localPresets.map((item) => item.slotId)))
@@ -451,17 +458,18 @@ export function useDashboardPageData() {
     setBacktest(result)
   }
 
-  async function handleRunStrategyOnce(symbols?: Array<'BTC_USDT' | 'ETH_USDT'>) {
+  async function handleRunStrategyOnce(symbols?: Array<'BTC_USDT' | 'ETH_USDT'>, overrideLeverage?: number, overrideTradeMode?: 'paper' | 'live') {
     const activeStrategy = selectedStrategyPreset?.config || strategy
     if (!activeStrategy) return
-    const activeSymbols = symbols && symbols.length > 0 ? symbols : [activeStrategy.symbol]
+    const activeSymbols = symbols && symbols.length > 0 ? symbols : (activeStrategy.symbols && activeStrategy.symbols.length > 0 ? activeStrategy.symbols : [activeStrategy.symbol])
     const payload: RunnerRequestPayload = {
       symbol: activeSymbols[0],
       symbols: activeSymbols,
       timeframe: activeStrategy.timeframe,
       strategy_type: activeStrategy.strategy_type,
       data_source: 'gate',
-      leverage: activeStrategy.leverage,
+      trade_mode: overrideTradeMode,
+      leverage: overrideLeverage ?? activeStrategy.leverage,
       allocated_margin: Number(dashboard?.defaults?.default_allocated_margin || 1000),
       use_boll: activeStrategy.use_boll,
       boll_period: activeStrategy.boll_period,
@@ -548,7 +556,11 @@ export function useDashboardPageData() {
   }
 
   async function handleClosePaper(payload: PaperClosePayload) {
-    await closePaperPosition(payload)
+    if (dashboard?.trade_mode === 'live') {
+      await closeLivePosition(payload.symbol, payload.position_id)
+    } else {
+      await closePaperPosition(payload)
+    }
     await Promise.all([
       reloadDashboard(),
       reloadHistory(),
@@ -603,5 +615,6 @@ export function useDashboardPageData() {
     handleMarkPaper,
     handleClosePaper,
     handleResetPaper,
+    reloadDashboard,
   }
 }

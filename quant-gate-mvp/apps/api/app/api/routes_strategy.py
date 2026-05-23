@@ -25,6 +25,7 @@ Symbol = str
 
 class StrategyConfig(BaseModel):
     symbol: Symbol = "BTC_USDT"
+    symbols: list[Symbol] | None = None
     timeframe: Timeframe = "15m"
     strategy_type: Literal["classic", "turtle", "ict"] = "classic"
     leverage: int = Field(default=5, ge=1, le=150)
@@ -55,12 +56,12 @@ class StrategyConfig(BaseModel):
     turtle_atr_filter: float = Field(default=0.0, ge=0.0)
     ict_bos_lookback: int = Field(default=10, ge=5, le=100)
     ict_risk_reward: float = Field(default=2.5, ge=1.0, le=5.0)
-    ict_lookback_eng_bars: int = Field(default=200, ge=1, le=500)
+    ict_lookback_eng_bars: int = Field(default=80, ge=1, le=500)
     ict_min_fvg_width_pct: float = Field(default=0.0, ge=0.0, le=0.01)
-    ict_cooldown_bars: int = Field(default=0, ge=0, le=100)
-    ict_require_trend: bool = Field(default=False)
+    ict_cooldown_bars: int = Field(default=4, ge=0, le=100)
+    ict_require_trend: bool = Field(default=True)
     stop_loss_pct: float = Field(default=0.02, gt=0, le=0.5)
-    take_profit_pct: float = Field(default=0.04, gt=0, le=2.0)
+    take_profit_pct: float = Field(default=0.05, gt=0, le=2.0)
     risk_per_trade_pct: float = Field(default=0.01, gt=0, le=0.1)
     fee_rate: float = Field(default=SETTINGS.default_fee_rate, ge=0, le=0.01)
     slippage_rate: float = Field(default=SETTINGS.default_slippage_rate, ge=0, le=0.01)

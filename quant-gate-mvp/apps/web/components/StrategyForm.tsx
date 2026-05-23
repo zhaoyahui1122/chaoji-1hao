@@ -15,7 +15,7 @@ type Props = {
   strategySlots?: Array<{
     slotId: number
     name?: string
-    config: Pick<StrategyConfig, 'symbol' | 'timeframe' | 'strategy_type' | 'leverage' | 'stop_loss_pct' | 'take_profit_pct' | 'risk_per_trade_pct' | 'turtle_entry_period' | 'turtle_exit_period'> & Partial<Pick<StrategyConfig, 'turtle_atr_period' | 'turtle_atr_filter' | 'turtle_adx_period' | 'turtle_adx_threshold' | 'turtle_force_mode' | 'ict_bos_lookback' | 'ict_risk_reward' | 'fee_rate' | 'slippage_rate'>>
+    config: Pick<StrategyConfig, 'symbol' | 'timeframe' | 'strategy_type' | 'leverage' | 'stop_loss_pct' | 'take_profit_pct' | 'risk_per_trade_pct' | 'turtle_entry_period' | 'turtle_exit_period'> & Partial<Pick<StrategyConfig, 'symbols' | 'turtle_atr_period' | 'turtle_atr_filter' | 'turtle_adx_period' | 'turtle_adx_threshold' | 'turtle_force_mode' | 'ict_bos_lookback' | 'ict_risk_reward' | 'fee_rate' | 'slippage_rate'>>
     locked?: boolean
   }>
   onStrategySlotChange?: (slotId: number) => void
@@ -158,6 +158,7 @@ export default function StrategyForm({ initial, onSave, onRunBacktest, priceRefe
     name: `策略 ${slotId}`,
     config: {
       symbol: form.symbol,
+      symbols: form.symbols,
       timeframe: form.timeframe,
       strategy_type: form.strategy_type,
       leverage: form.leverage,
@@ -209,7 +210,7 @@ export default function StrategyForm({ initial, onSave, onRunBacktest, priceRefe
                       </div>
                     </div>
                     <div style={{ fontSize: 12, color: active ? 'rgba(255,255,255,0.78)' : '#475569', lineHeight: 1.65, marginTop: 8 }}>
-                      {slot.config.symbol} · {slot.config.timeframe} · {slot.config.leverage}x · {slot.config.strategy_type === 'turtle' ? '海龟' : slot.config.strategy_type === 'ict' ? 'ICT三周期' : '经典'}
+                      {(slot.config.symbols ?? [slot.config.symbol]).join(' / ')} · {slot.config.timeframe} · {slot.config.leverage}x · {slot.config.strategy_type === 'turtle' ? '海龟' : slot.config.strategy_type === 'ict' ? 'ICT三周期' : '经典'}
                     </div>
                     <div style={{ fontSize: 12, color: active ? 'rgba(255,255,255,0.72)' : '#64748b', lineHeight: 1.65, marginTop: 4 }}>
                       SL {(slot.config.stop_loss_pct * 100).toFixed(2)}% ｜ TP {(slot.config.take_profit_pct * 100).toFixed(2)}% ｜ Risk {(slot.config.risk_per_trade_pct * 100).toFixed(2)}%
@@ -259,6 +260,42 @@ export default function StrategyForm({ initial, onSave, onRunBacktest, priceRefe
               style={{ padding: '8px 10px', borderRadius: 10, border: '1px solid rgba(148,163,184,0.28)', background: '#fff', minWidth: 220 }}
             />
           </label>
+          <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+            <span style={{ fontSize: 12, color: '#475569', fontWeight: 700 }}>Runner 交易对</span>
+            {(['BTC_USDT', 'ETH_USDT'] as const).map((sym) => {
+              const active = (form.symbols ?? [form.symbol]).includes(sym)
+              return (
+                <button
+                  key={sym}
+                  type="button"
+                  onClick={() => {
+                    const current = form.symbols ?? [form.symbol]
+                    let next: Array<'BTC_USDT' | 'ETH_USDT'>
+                    if (active && current.length > 1) {
+                      next = current.filter((s) => s !== sym)
+                    } else if (!active) {
+                      next = [...current, sym]
+                    } else {
+                      return
+                    }
+                    update('symbols' as any, next as any)
+                  }}
+                  style={{
+                    padding: '8px 14px',
+                    borderRadius: 999,
+                    border: 0,
+                    background: active ? 'linear-gradient(135deg, #2563eb 0%, #38bdf8 100%)' : 'rgba(15,23,42,0.08)',
+                    color: active ? '#fff' : '#0f172a',
+                    fontWeight: 800,
+                    fontSize: 13,
+                    cursor: 'pointer',
+                  }}
+                >
+                  {sym === 'BTC_USDT' ? 'BTC' : 'ETH'}
+                </button>
+              )
+            })}
+          </div>
         </div>
         <button type="button" onClick={() => setCollapsed((prev) => !prev)} style={{ ...buttonStyle('rgba(15,23,42,0.08)'), color: '#0f172a', boxShadow: 'none' }}>
           {collapsed ? '展开参数' : '收起参数'}

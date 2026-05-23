@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState, useRef } from 'react'
 import type React from 'react'
 import { getContractInfo } from '../lib/api'
 
@@ -28,7 +28,7 @@ type Props = {
   onMark: (payload: { symbol: 'BTC_USDT' | 'ETH_USDT'; mark_price: number; position_id?: string }) => Promise<void>
   onClose: (payload: { symbol: 'BTC_USDT' | 'ETH_USDT'; price: number; position_id?: string }) => Promise<void>
   onReset?: (initialBalance: number) => Promise<void>
-  onRunStrategyOnce?: (symbols?: Array<'BTC_USDT' | 'ETH_USDT'>) => Promise<void>
+  onRunStrategyOnce?: (symbols?: Array<'BTC_USDT' | 'ETH_USDT'>, leverage?: number, tradeMode?: 'paper' | 'live') => Promise<void>
   accountEquity?: number
   marketTickers?: Record<'BTC_USDT' | 'ETH_USDT', { last_price: number; mark_price: number } | null>
   positions?: Array<{ position_id?: string | null; symbol: 'BTC_USDT' | 'ETH_USDT'; side: 'long' | 'short'; entry_price: number; mark_price: number; qty: number; leverage: number; unrealized_pnl?: number }>
@@ -192,8 +192,12 @@ export default function PaperTradePanel({ onOpen, onMark, onClose, onReset, onRu
     }
   }, [selectedStrategySlot, selectedStrategySlotId, strategyPresets])
 
+  const prevSlotIdRef = useRef<number | null>(null)
   useEffect(() => {
     if (!selectedPreset || !syncWithStrategy) return
+    // 只在切换策略槽位时同步参数，避免数据刷新覆盖用户手动选择
+    if (prevSlotIdRef.current === selectedPreset.slotId) return
+    prevSlotIdRef.current = selectedPreset.slotId
     setSymbol(selectedPreset.config.symbol)
     setLeverage(selectedPreset.config.leverage)
     setStopLossPct(selectedPreset.config.stop_loss_pct)
@@ -564,7 +568,7 @@ export default function PaperTradePanel({ onOpen, onMark, onClose, onReset, onRu
                 setRobotFeedback('机器人启动中...')
                 try {
                   if (runMode === 'auto' && onRunStrategyOnce) {
-                    await onRunStrategyOnce(selectedRobotSymbols)
+                    await onRunStrategyOnce(selectedRobotSymbols, leverage, tradeMode)
                     await onStartRobot?.(selectedRobotSymbols)
                     setIsRobotRunning(true)
                     onRobotRunningChange?.(true)

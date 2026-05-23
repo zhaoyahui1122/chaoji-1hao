@@ -97,7 +97,8 @@ function MetricTile({ label, value, positive }: { label: string; value: string |
 }
 
 const toInt = (value: number) => Math.round(value)
-const toIntMoney = (value: number) => `$${toInt(value).toLocaleString()}`
+const toIntMoney = (value: number) => `$${value.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+const toPrice = (value: number) => value.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 
 function readRunnerStatusSymbols(runner: DashboardData['runner']) {
   const selected = runner?.selected_symbols
@@ -112,19 +113,33 @@ export function PositionsOverviewCard({
   marketTickers,
   riskConfig,
   onClosePosition,
+  onCloseAll,
 }: {
   dashboard: DashboardData
   positionsOverride?: DashboardData['positions']
   marketTickers?: MarketTickers
   riskConfig: { stopLossPct: number; takeProfitPct: number }
   onClosePosition?: (payload: { symbol: 'BTC_USDT' | 'ETH_USDT'; price: number; position_id?: string }) => Promise<void>
+  onCloseAll?: () => Promise<void>
 }) {
   const positions = positionsOverride ?? dashboard.positions
   const runnerStatusSymbols = readRunnerStatusSymbols(dashboard.runner)
 
   return (
     <div style={cardStyle}>
-      {panelHeader('当前持仓', '聚焦当前仓位风险、盈亏和强平距离，快速判断账户是否需要减仓。')}
+      {panelHeader(
+        '当前持仓',
+        '聚焦当前仓位风险、盈亏和强平距离，快速判断账户是否需要减仓。',
+        positions.length > 0 && onCloseAll ? (
+          <button
+            type="button"
+            onClick={onCloseAll}
+            style={{ padding: '9px 18px', borderRadius: 12, border: 0, background: '#dc2626', color: '#fff', fontWeight: 800, cursor: 'pointer', whiteSpace: 'nowrap' }}
+          >
+            一键平仓
+          </button>
+        ) : undefined,
+      )}
       <div style={{ ...panelStyle, marginBottom: 12 }}>
         <div style={{ fontWeight: 800, marginBottom: 6 }}>当前 Runner 选中交易对</div>
         <div style={{ fontSize: 16, fontWeight: 800, color: '#0f172a' }}>{runnerStatusSymbols || '-'}</div>
@@ -134,26 +149,23 @@ export function PositionsOverviewCard({
           <p style={{ color: '#6b7280' }}>暂无持仓</p>
         ) : positions.map((position) => {
           const livePrice = resolveLivePositionPrice(position, marketTickers)
-          const unrealizedPnl = position.side === 'long'
+          const unrealizedPnl = position.unrealized_pnl ?? (position.side === 'long'
             ? (livePrice - position.entry_price) * position.qty
-            : (position.entry_price - livePrice) * position.qty
-          const pnlReturnRatio = position.initial_margin > 0 ? unrealizedPnl / position.initial_margin : 0
+            : (position.entry_price - livePrice) * position.qty)
+          const margin = position.margin ?? position.initial_margin
+          const pnlReturnRatio = margin > 0 ? unrealizedPnl / margin : 0
           const unrealizedPnlPct = position.entry_price > 0
             ? (position.side === 'long' ? (livePrice - position.entry_price) : (position.entry_price - livePrice)) / position.entry_price
             : 0
-          const stopLossPrice = derivePositionTarget(position, 'stop_loss_price', riskConfig.stopLossPct)
-          const takeProfitPrice = derivePositionTarget(position, 'take_profit_price', riskConfig.takeProfitPct)
+          const stopLossPrice = position.stop_loss_price ?? derivePositionTarget(position, 'stop_loss_price', riskConfig.stopLossPct)
+          const takeProfitPrice = position.take_profit_price ?? derivePositionTarget(position, 'take_profit_price', riskConfig.takeProfitPct)
           const slDistancePct = position.entry_price > 0
             ? (position.side === 'long' ? (livePrice - stopLossPrice) : (stopLossPrice - livePrice)) / position.entry_price
             : 0
-          const lastRunConfig = dashboard.runner?.last_run_config
-          const currentStrategyConfig = dashboard.runner?.current_strategy_config
-          const lastRunScore = readRunnerConfigNumber(lastRunConfig, 'min_signal_score')
-          const currentScore = readRunnerConfigNumber(currentStrategyConfig, 'min_signal_score')
-          const lastRunChurnGuard = readRunnerConfigBoolean(lastRunConfig, 'churn_guard_enabled')
-          const currentChurnGuard = readRunnerConfigBoolean(currentStrategyConfig, 'churn_guard_enabled')
-          const lastRunSymbols = readRunnerConfigSymbols(lastRunConfig)
-          const currentSymbols = readRunnerConfigSymbols(currentStrategyConfig)
+          const liqPrice = position.liq_price ?? position.liquidation_price
+          const liqDistPct = liqPrice > 0 && livePrice > 0
+            ? Math.abs(livePrice - liqPrice) / livePrice
+            : 0
 
           return (
             <div key={`${position.symbol}-${position.side}`} style={panelStyle}>
@@ -167,53 +179,22 @@ export function PositionsOverviewCard({
                 </div>
                 <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
                   <div style={{ fontWeight: 800, color: unrealizedPnl >= 0 ? '#166534' : '#b91c1c' }}>{toIntMoney(unrealizedPnl)}</div>
-                  <button
-                    type="button"
-                    onClick={() => onClosePosition?.({ symbol: position.symbol as 'BTC_USDT' | 'ETH_USDT', price: livePrice, position_id: position.position_id ?? undefined })}
-                    style={{ padding: '9px 14px', borderRadius: 12, border: 0, background: '#dc2626', color: '#fff', fontWeight: 800, cursor: 'pointer' }}
-                  >
-                    平仓
-                  </button>
                 </div>
               </div>
 
               <div style={metricGridStyle}>
-                <MetricTile label="开仓价" value={toInt(position.entry_price)} />
-                <MetricTile label="当前价格" value={toInt(livePrice)} />
+                <MetricTile label="开仓价" value={toPrice(position.entry_price)} />
+                <MetricTile label="当前价格" value={toPrice(livePrice)} />
                 <MetricTile label="数量" value={toInt(position.qty)} />
-                <MetricTile label="止损价" value={toInt(stopLossPrice)} />
-                <MetricTile label="止盈价" value={toInt(takeProfitPrice)} />
+                <MetricTile label="止损价" value={toPrice(stopLossPrice)} />
+                <MetricTile label="止盈价" value={toPrice(takeProfitPrice)} />
                 <MetricTile label="距止损" value={`${(slDistancePct * 100).toFixed(2)}%`} positive={slDistancePct >= 0.01} />
                 <MetricTile label="未实现盈亏" value={`${(unrealizedPnlPct * 100).toFixed(2)}%`} positive={unrealizedPnlPct >= 0} />
-                <MetricTile label="初始保证金" value={toIntMoney(position.initial_margin)} />
-                <MetricTile label="维持保证金" value={toIntMoney(position.maintenance_margin)} />
+                <MetricTile label="保证金" value={toIntMoney(margin)} />
                 <MetricTile label="未实现盈亏" value={toIntMoney(unrealizedPnl)} positive={unrealizedPnl >= 0} />
-                <MetricTile label="收益 / 保证金" value={`${toInt(pnlReturnRatio * 100)}%`} positive={pnlReturnRatio >= 0} />
-                <MetricTile label="保证金率" value={`${toInt(position.margin_ratio * 100)}%`} positive={position.margin_ratio < 1} />
-                <MetricTile label="强平价(估)" value={toInt(position.liquidation_price)} />
-                <MetricTile label="距强平" value={`${toInt(position.liquidation_distance_ratio * 100)}%`} positive={position.liquidation_distance_ratio >= 0.05} />
-              </div>
-
-              <div style={{ ...panelStyle, marginTop: 12 }}>
-                <div style={{ fontWeight: 800, marginBottom: 8 }}>Runner 配置对照</div>
-                <div style={{ color: '#64748b', fontSize: 12, marginBottom: 10 }}>运行快照展示的是最近一次真实执行参数，当前策略展示的是现在保存的面板参数。</div>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 10 }}>
-                  <div style={metricTileStyle}>
-                    <div style={labelStyle}>最近执行交易对</div>
-                    <div style={metricValueStyle}>{lastRunSymbols}</div>
-                    <div style={{ fontSize: 12, color: '#64748b' }}>当前策略：{currentSymbols}</div>
-                  </div>
-                  <div style={metricTileStyle}>
-                    <div style={labelStyle}>开仓评分阈值</div>
-                    <div style={metricValueStyle}>{lastRunScore ?? '-'}</div>
-                    <div style={{ fontSize: 12, color: '#64748b' }}>当前策略：{currentScore ?? '-'}</div>
-                  </div>
-                  <div style={metricTileStyle}>
-                    <div style={labelStyle}>防频繁反手</div>
-                    <div style={metricValueStyle}>{lastRunChurnGuard == null ? '-' : lastRunChurnGuard ? '开启' : '关闭'}</div>
-                    <div style={{ fontSize: 12, color: '#64748b' }}>当前策略：{currentChurnGuard == null ? '-' : currentChurnGuard ? '开启' : '关闭'}</div>
-                  </div>
-                </div>
+                <MetricTile label="收益/保证金" value={`${toInt(pnlReturnRatio * 100)}%`} positive={pnlReturnRatio >= 0} />
+                {liqPrice > 0 && <MetricTile label="强平价" value={toPrice(liqPrice)} />}
+                {liqDistPct > 0 && <MetricTile label="距强平" value={`${(liqDistPct * 100).toFixed(2)}%`} positive={liqDistPct >= 0.05} />}
               </div>
             </div>
           )

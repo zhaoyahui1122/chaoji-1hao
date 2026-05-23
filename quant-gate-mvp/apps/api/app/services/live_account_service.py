@@ -38,6 +38,8 @@ def build_live_account_snapshot(account_raw: dict[str, Any], positions_raw: list
 
     for item in positions_raw:
         size = abs(_to_float(item.get("size")))
+        if size == 0:
+            continue
         unrealized_pnl = _to_float(item.get("unrealised_pnl") or item.get("unrealized_pnl"))
         margin_used = _to_float(item.get("margin") or item.get("position_margin") or item.get("initial_margin"))
         normalized = {
@@ -48,6 +50,8 @@ def build_live_account_snapshot(account_raw: dict[str, Any], positions_raw: list
             "entry_price": _to_float(item.get("entry_price")),
             "mark_price": _to_float(item.get("mark_price")),
             "unrealized_pnl": unrealized_pnl,
+            "margin": margin_used,
+            "liq_price": _to_float(item.get("liq_price")),
         }
         unrealized_pnl_total += unrealized_pnl
         margin_used_total += margin_used

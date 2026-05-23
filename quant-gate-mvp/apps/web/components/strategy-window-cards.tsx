@@ -257,6 +257,7 @@ export function RunnerControlCard({
             name: item.name,
             config: {
               symbol: item.config.symbol,
+              symbols: item.config.symbols,
               timeframe: item.config.timeframe,
               strategy_type: item.config.strategy_type,
               leverage: item.config.leverage,
@@ -284,7 +285,14 @@ export function RunnerControlCard({
         <div style={{ marginTop: 16, display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
           <button onClick={onRunStrategyOnce} style={primaryButtonStyle}>运行一次策略执行</button>
           <button
-            onClick={() => onToggleRunner(!(dashboard.runner?.enabled ?? false), dashboard.runner?.enabled ? undefined : allSupportedSymbols, (dashboard.runner as any)?.trade_mode || 'paper')}
+            onClick={() => {
+              const enabling = !(dashboard.runner?.enabled ?? false)
+              onToggleRunner(
+                enabling,
+                enabling ? (activeStrategy.symbols && activeStrategy.symbols.length > 0 ? activeStrategy.symbols : [activeStrategy.symbol]) : undefined,
+                enabling ? undefined : (dashboard.runner as any)?.trade_mode,
+              )
+            }}
             style={{ ...secondaryButtonStyle, background: dashboard.runner?.enabled ? '#dc2626' : '#2563eb', color: '#fff' }}
           >
             {dashboard.runner?.enabled ? '暂停机器人并市价平仓' : '开启自动运行标记'}

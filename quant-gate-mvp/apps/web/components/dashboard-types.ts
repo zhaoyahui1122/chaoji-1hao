@@ -66,6 +66,10 @@ export type DashboardData = {
     margin_ratio: number
     liquidation_price: number
     liquidation_distance_ratio: number
+    stop_loss_price?: number | null
+    take_profit_price?: number | null
+    margin?: number
+    liq_price?: number
     open_order_meta_json?: string | null
   }>
   orders?: Array<{
@@ -88,6 +92,7 @@ export type DashboardData = {
 
 export type StrategyConfig = {
   symbol: 'BTC_USDT' | 'ETH_USDT'
+  symbols?: Array<'BTC_USDT' | 'ETH_USDT'>
   timeframe: '5m' | '15m' | '30m' | '1h' | '4h'
   strategy_type: 'classic' | 'turtle' | 'ict'
   leverage: number

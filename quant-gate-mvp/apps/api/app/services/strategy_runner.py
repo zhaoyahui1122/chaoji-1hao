@@ -260,7 +260,7 @@ def run_strategy_cycle(config: dict[str, Any]) -> dict[str, Any]:
     allocated_margin = float(config.get("allocated_margin", 1000))
     risk_per_trade_pct = float(config.get("risk_per_trade_pct", 0.01))
     stop_loss_pct = float(config.get("stop_loss_pct", 0.02))
-    take_profit_pct = float(config.get("take_profit_pct", 0.04))
+    take_profit_pct = float(config.get("take_profit_pct", 0.05))
     data_source = config.get("data_source", "gate")
     fee_rate = float(config.get("fee_rate", 0.00015))
     slippage_rate = float(config.get("slippage_rate", 0.0001))

@@ -371,6 +371,42 @@ def insert_live_position(
         conn.commit()
 
 
+def upsert_live_position(
+    position_id: str,
+    symbol: str,
+    side: str,
+    leverage: int,
+    qty: float,
+    entry_price: float,
+    mark_price: float,
+) -> None:
+    """Insert or update a live position record, keeping qty/entry_price in sync with Gate."""
+    init_db()
+    with get_conn() as conn:
+        existing = conn.execute(
+            "SELECT id FROM paper_positions WHERE position_id = ? AND status = 'open' AND trade_mode = 'live' ORDER BY id DESC LIMIT 1",
+            (position_id,),
+        ).fetchone()
+        if existing:
+            conn.execute(
+                """
+                UPDATE paper_positions SET qty = ?, entry_price = ?, mark_price = ?, leverage = ?, side = ?
+                WHERE id = ?
+                """,
+                (float(qty), float(entry_price), float(mark_price), int(leverage), side, int(existing["id"])),
+            )
+        else:
+            conn.execute(
+                """
+                INSERT INTO paper_positions(position_id, symbol, side, leverage, qty, entry_price, mark_price, status, trade_mode)
+                VALUES (?, ?, ?, ?, ?, ?, ?, 'open', 'live')
+                """,
+                (position_id, symbol, side, int(leverage), float(qty), float(entry_price), float(mark_price)),
+            )
+        conn.commit()
+        conn.commit()
+
+
 def get_equity_curve(limit: int = 200, trade_mode: str | None = None) -> list[dict[str, Any]]:
     init_db()
     clauses: list[str] = []
@@ -393,6 +429,22 @@ def get_equity_curve(limit: int = 200, trade_mode: str | None = None) -> list[di
     items = [dict(row) for row in rows]
     items.reverse()
     return items
+
+
+def write_equity_snapshot(equity: float, realized_pnl: float, trade_mode: str = "live") -> None:
+    """Write a single equity snapshot for drawdown tracking."""
+    init_db()
+    with get_conn() as conn:
+        conn.execute(
+            """
+            INSERT INTO paper_account_snapshots(
+                initial_balance, realized_pnl, equity, available_balance,
+                margin_used, margin_ratio, unrealized_pnl, open_positions, trade_mode
+            ) VALUES (?, ?, ?, ?, 0, 0, 0, 0, ?)
+            """,
+            (10000.0, float(realized_pnl), float(equity), float(equity), trade_mode),
+        )
+        conn.commit()
 
 
 def get_order_history(

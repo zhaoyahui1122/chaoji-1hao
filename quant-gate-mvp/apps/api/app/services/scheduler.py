@@ -89,7 +89,7 @@ def _extract_live_position_targets(position, stop_loss_pct: float, take_profit_p
                 return float(raw_stop_loss), float(raw_take_profit)
         except (TypeError, ValueError, json.JSONDecodeError):
             pass
-    return _extract_position_targets(position, stop_loss_pct, take_profit_pct)
+    return _extract_position_targets(position, stop_loss_pct, take_profit_pct, broker=broker)
 
 
 def _refresh_open_position_marks(trade_mode: str = "paper") -> dict[str, float]:
@@ -173,6 +173,13 @@ def _maybe_refresh_live_marks(state: dict[str, Any], now_ts: float) -> None:
 
     try:
         refreshed_prices = _refresh_open_position_marks(trade_mode)
+        # 实盘模式下同步 live session 数据，让前端看到最新的未实现盈亏
+        if trade_mode == "live":
+            try:
+                from app.services.live_account_service import refresh_live_account
+                refresh_live_account()
+            except Exception:
+                pass
         save_runner_state({
             **load_runner_state(),
             "last_mark_refresh_at": now_ts,

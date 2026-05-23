@@ -16,7 +16,7 @@ from app.services.gate_live_account import (
     fetch_futures_positions,
 )
 from app.services.live_account_session import get_live_account_session
-from app.services.paper_store import append_order_event, close_structured_position, insert_live_position
+from app.services.paper_store import append_order_event, close_structured_position, insert_live_position, upsert_live_position, write_equity_snapshot
 
 logger = get_logger(__name__)
 
@@ -25,11 +25,11 @@ GATE_FUTURES_POSITIONS_PATH = "/api/v4/futures/usdt/positions"
 GATE_FUTURES_PRICE_ORDERS_PATH = "/api/v4/futures/usdt/price_orders"
 GATE_CONTRACTS_PATH = "/api/v4/futures/usdt/contracts"
 
-_contract_cache: dict[str, float] = {}
+_contract_cache: dict[str, dict[str, float]] = {}
 
 
-def _get_quanto_multiplier(contract: str) -> float:
-    """Fetch contract quanto_multiplier from Gate (cached)."""
+def _get_contract_info(contract: str) -> dict[str, float]:
+    """Fetch and cache contract info (quanto_multiplier, tick_size)."""
     cached = _contract_cache.get(contract)
     if cached is not None:
         return cached
@@ -39,11 +39,29 @@ def _get_quanto_multiplier(contract: str) -> float:
             timeout=10,
         )
         resp.raise_for_status()
-        multiplier = float(resp.json().get("quanto_multiplier", "1"))
-        _contract_cache[contract] = multiplier
-        return multiplier
+        data = resp.json()
+        info = {
+            "quanto_multiplier": float(data.get("quanto_multiplier", "1")),
+            "tick_size": float(data.get("order_price_round", "0.1")),
+        }
+        _contract_cache[contract] = info
+        return info
     except Exception:
-        return 1.0  # fallback: assume 1 USD per contract
+        return {"quanto_multiplier": 1.0, "tick_size": 0.1}
+
+
+def _round_price_tick(price: float, contract: str | None = None) -> float:
+    """Round price to the contract's valid tick size."""
+    tick = 0.1
+    if contract:
+        tick = _get_contract_info(contract).get("tick_size", 0.1)
+    decimals = max(0, len(str(tick).split('.')[-1]) if '.' in str(tick) else 0)
+    return round(round(price / tick) * tick, decimals)
+
+
+def _get_quanto_multiplier(contract: str) -> float:
+    """Fetch contract quanto_multiplier from Gate (cached)."""
+    return _get_contract_info(contract).get("quanto_multiplier", 1.0)
 
 
 @dataclass
@@ -75,10 +93,13 @@ class GateLiveBroker:
 
     def __init__(self):
         self._positions: list[LivePosition] = []
+        self._raw_positions: list[dict[str, Any]] = []  # raw Gate API data
         self._orders: list[LiveOrder] = []
         self._last_sync: str | None = None
         self._sl_order_ids: dict[str, str] = {}  # contract -> exchange SL order id
         self._sl_prices: dict[str, float] = {}   # contract -> current SL price
+        self._tp_order_ids: dict[str, str] = {}  # contract -> exchange TP order id
+        self._tp_prices: dict[str, float] = {}   # contract -> current TP price
 
     def _creds(self) -> tuple[str, str]:
         session = get_live_account_session()
@@ -116,6 +137,7 @@ class GateLiveBroker:
         api_key, api_secret = self._creds()
         raw_positions = fetch_futures_positions(api_key, api_secret)
         self._positions = []
+        self._raw_positions = []
         for item in raw_positions:
             size = int(item.get("size", 0))
             if size == 0:
@@ -130,6 +152,7 @@ class GateLiveBroker:
                 entry_price=float(item.get("entry_price", 0)),
                 mark_price=float(item.get("mark_price", 0)),
             ))
+            self._raw_positions.append(item)
         self._last_sync = datetime.now(timezone.utc).isoformat()
         return self._positions
 
@@ -149,17 +172,20 @@ class GateLiveBroker:
         api_key, api_secret = self._creds()
         contract = symbol.upper()
 
-        # Set leverage with proper error handling
+        # Set leverage via POST query string (Gate.io API)
         leverage_actual = leverage
         try:
             lev_resp = _gate_private_request(
-                "PUT",
-                f"{GATE_FUTURES_POSITIONS_PATH}/{contract}",
+                "POST",
+                f"{GATE_FUTURES_POSITIONS_PATH}/{contract}/leverage",
                 api_key=api_key,
                 api_secret=api_secret,
-                body=json.dumps({"leverage": str(leverage)}),
+                query_string=f"leverage={leverage}",
             )
-            if isinstance(lev_resp, dict):
+            # Response is a list; extract from first item
+            if isinstance(lev_resp, list) and lev_resp:
+                leverage_actual = int(float(lev_resp[0].get("leverage", leverage)))
+            elif isinstance(lev_resp, dict):
                 leverage_actual = int(float(lev_resp.get("leverage", leverage)))
         except RuntimeError as exc:
             error_msg = str(exc)
@@ -169,13 +195,15 @@ class GateLiveBroker:
             # Network/other error: retry once
             try:
                 lev_resp = _gate_private_request(
-                    "PUT",
-                    f"{GATE_FUTURES_POSITIONS_PATH}/{contract}",
+                    "POST",
+                    f"{GATE_FUTURES_POSITIONS_PATH}/{contract}/leverage",
                     api_key=api_key,
                     api_secret=api_secret,
-                    body=json.dumps({"leverage": str(leverage)}),
+                    query_string=f"leverage={leverage}",
                 )
-                if isinstance(lev_resp, dict):
+                if isinstance(lev_resp, list) and lev_resp:
+                    leverage_actual = int(float(lev_resp[0].get("leverage", leverage)))
+                elif isinstance(lev_resp, dict):
                     leverage_actual = int(float(lev_resp.get("leverage", leverage)))
             except Exception as exc2:
                 logger.error("[LIVE] Leverage retry failed: %s", exc2)
@@ -237,27 +265,54 @@ class GateLiveBroker:
             meta=meta,
             trade_mode="live",
         )
+        # Sync positions from Gate and upsert with actual accumulated values
         try:
-            insert_live_position(
-                position_id=contract,
-                symbol=contract,
-                side=side,
-                leverage=leverage,
-                qty=float(qty),
-                entry_price=execution_price,
-                mark_price=execution_price,
-                meta=meta,
-            )
+            self.sync_positions()
+            gate_pos = next((p for p in self._positions if p.symbol == contract), None)
+            if gate_pos:
+                upsert_live_position(
+                    position_id=contract,
+                    symbol=contract,
+                    side=gate_pos.side,
+                    leverage=gate_pos.leverage,
+                    qty=gate_pos.qty,
+                    entry_price=gate_pos.entry_price,
+                    mark_price=gate_pos.mark_price,
+                )
+            else:
+                insert_live_position(
+                    position_id=contract,
+                    symbol=contract,
+                    side=side,
+                    leverage=leverage,
+                    qty=float(qty),
+                    entry_price=execution_price,
+                    mark_price=execution_price,
+                    meta=meta,
+                )
         except Exception:
-            pass  # Position may already exist from a previous order
+            pass
 
-        # Place exchange-side stop-loss conditional order (safety net)
+        # Place exchange-side stop-loss and take-profit conditional orders
         exchange_sl_order_id = None
         if stop_loss_price and stop_loss_price > 0:
+            # 防重复：先取消已有止损单
+            old_sl_id = self._sl_order_ids.get(contract)
+            if old_sl_id:
+                try:
+                    _gate_private_request(
+                        "DELETE",
+                        f"{GATE_FUTURES_PRICE_ORDERS_PATH}/{old_sl_id}",
+                        api_key=api_key, api_secret=api_secret,
+                    )
+                except Exception:
+                    pass
             try:
                 sl_size = -order_size  # Reverse to close
-                # Gate rule: 1 = price <= trigger (for long stop-loss), 2 = price >= trigger (for short stop-loss)
-                sl_rule = 1 if side == "long" else 2
+                # Gate rule: 1 = price <= trigger, 2 = price >= trigger
+                # SL (both long/short): rule=1
+                sl_rule = 1
+                sl_trigger = _round_price_tick(stop_loss_price, contract)
                 sl_body = json.dumps({
                     "contract": contract,
                     "initial": {
@@ -265,14 +320,12 @@ class GateLiveBroker:
                         "size": sl_size,
                         "price": "0",
                         "tif": "ioc",
-                        "close": True,
                         "reduce_only": True,
                     },
                     "trigger": {
-                        "price": str(stop_loss_price),
+                        "price": str(sl_trigger),
                         "rule": sl_rule,
                     },
-                    "order_type": "market",
                 })
                 sl_result = _gate_private_request(
                     "POST",
@@ -285,9 +338,46 @@ class GateLiveBroker:
                 if exchange_sl_order_id:
                     self._sl_order_ids[contract] = exchange_sl_order_id
                     self._sl_prices[contract] = stop_loss_price
-                logger.info("[LIVE] Exchange SL placed: contract=%s trigger=%.1f id=%s", contract, stop_loss_price, exchange_sl_order_id)
+                logger.info("[LIVE] Exchange SL placed: contract=%s trigger=%.1f id=%s", contract, sl_trigger, exchange_sl_order_id)
             except Exception as sl_exc:
                 logger.warning("[LIVE] Exchange SL placement failed (non-blocking): %s", sl_exc)
+
+        # Place take-profit conditional order
+        take_profit_price = (meta or {}).get("take_profit_price")
+        if take_profit_price and take_profit_price > 0:
+            try:
+                tp_size = -order_size
+                # TP: long → rule=2 (price rises), short → rule=1 (price drops)
+                tp_rule = 2 if side == "long" else 1
+                tp_trigger = _round_price_tick(take_profit_price, contract)
+                tp_body = json.dumps({
+                    "contract": contract,
+                    "initial": {
+                        "contract": contract,
+                        "size": tp_size,
+                        "price": "0",
+                        "tif": "ioc",
+                        "reduce_only": True,
+                    },
+                    "trigger": {
+                        "price": str(tp_trigger),
+                        "rule": tp_rule,
+                    },
+                })
+                tp_result = _gate_private_request(
+                    "POST",
+                    GATE_FUTURES_PRICE_ORDERS_PATH,
+                    api_key=api_key,
+                    api_secret=api_secret,
+                    body=tp_body,
+                )
+                tp_order_id = str(tp_result.get("id", ""))
+                if tp_order_id:
+                    self._tp_order_ids[contract] = tp_order_id
+                    self._tp_prices[contract] = take_profit_price
+                logger.info("[LIVE] Exchange TP placed: contract=%s trigger=%.1f id=%s", contract, tp_trigger, tp_order_id)
+            except Exception as tp_exc:
+                logger.error("[LIVE] Exchange TP FAILED: contract=%s trigger=%.2f rule=%d size=%d error=%s", contract, tp_trigger, tp_rule, tp_size, tp_exc)
 
         # Sync positions after order
         self.sync_positions()
@@ -344,7 +434,6 @@ class GateLiveBroker:
             "size": close_size,
             "price": "0",  # Market order
             "tif": "ioc",
-            "close": True,
             "reduce_only": True,
         })
 
@@ -362,8 +451,69 @@ class GateLiveBroker:
         fill_price = float(result.get("fill_price") or result.get("avg_deal_price") or result.get("price") or 0)
         execution_price = fill_price if fill_price > 0 else price
 
-        pnl = (execution_price - target.entry_price) * target.qty if target.side == "long" else (target.entry_price - execution_price) * target.qty
-        logger.info("[LIVE] CLOSE %s %s @ market (pnl=%.2f, order_id=%s, fill=%.1f)", contract, target.side, pnl, order_id, execution_price)
+        # Query Gate's position_close for authoritative PnL and fees
+        # Gate's pnl_pnl (trading PnL) and pnl_fee (total fees) are already in USDT
+        # for USDT-margined contracts — no unit conversion needed
+        gate_net_pnl = None
+        gate_total_fees = 0.0
+        try:
+            pos_closes = _gate_private_request(
+                "GET", "/api/v4/futures/usdt/position_close",
+                api_key=api_key, api_secret=api_secret,
+                query_string=f"contract={contract}&limit=1",
+            )
+            if isinstance(pos_closes, list) and pos_closes:
+                pc = pos_closes[0]
+                # pnl_pnl = trading PnL in USDT, pnl_fee = total fees in USDT
+                # These already account for quanto_multiplier internally
+                pnl_trading = float(pc.get("pnl_pnl") or 0)
+                pnl_fee_total = abs(float(pc.get("pnl_fee") or 0))
+                gate_net_pnl = pnl_trading - pnl_fee_total
+                gate_total_fees = pnl_fee_total
+                actual_qty = abs(int(pc.get("max_size") or 0))
+                actual_entry = float(pc.get("short_price") or pc.get("long_price") or target.entry_price)
+                if target.side == "long":
+                    actual_entry = float(pc.get("long_price") or target.entry_price)
+                # Update target with Gate's authoritative values
+                if actual_qty > 0:
+                    target.qty = float(actual_qty)
+                if actual_entry > 0:
+                    target.entry_price = actual_entry
+                logger.info("[LIVE] Gate position_close: %s trading=%.4f fee=%.4f net=%.4f qty=%d entry=%.1f",
+                    contract, pnl_trading, pnl_fee_total, gate_net_pnl, actual_qty, actual_entry)
+        except Exception as pc_exc:
+            logger.warning("[LIVE] position_close query failed: %s", pc_exc)
+
+        if gate_net_pnl is not None:
+            net_pnl = gate_net_pnl
+            total_fees = gate_total_fees
+            gross_pnl = net_pnl + total_fees
+        else:
+            # Fallback: estimate fees from trades endpoint (fee is per-contract)
+            total_fees = 0.0
+            try:
+                recent_trades = _gate_private_request(
+                    "GET", "/api/v4/futures/usdt/my_trades",
+                    api_key=api_key, api_secret=api_secret,
+                    query_string=f"contract={contract}&limit=10",
+                )
+                if isinstance(recent_trades, list):
+                    for t in recent_trades:
+                        fee_per_contract = abs(float(t.get("fee") or 0))
+                        trade_size = abs(int(t.get("size") or 0))
+                        total_fees += fee_per_contract * trade_size
+            except Exception:
+                pass
+            # Estimate gross PnL with quanto multiplier
+            quanto_multiplier = _get_quanto_multiplier(contract)
+            gross_pnl_raw = (execution_price - target.entry_price) * target.qty if target.side == "long" else (target.entry_price - execution_price) * target.qty
+            gross_pnl = gross_pnl_raw * quanto_multiplier
+            net_pnl = gross_pnl - total_fees
+
+        # Slippage estimate: small for liquid pairs
+        total_slippage = abs(target.entry_price * target.qty) * 0.00001
+
+        logger.info("[LIVE] CLOSE %s %s @ market (gross=%.2f, fees=%.4f, net=%.2f, order_id=%s, fill=%.1f)", contract, target.side, gross_pnl, total_fees, net_pnl, order_id, execution_price)
 
         self._orders.append(LiveOrder(
             position_id=contract,
@@ -391,10 +541,22 @@ class GateLiveBroker:
             trade_mode="live",
         )
         try:
+            # Update position with Gate's actual entry_price and qty before closing
+            upsert_live_position(
+                position_id=contract,
+                symbol=contract,
+                side=target.side,
+                leverage=target.leverage if hasattr(target, 'leverage') else 1,
+                qty=target.qty,
+                entry_price=target.entry_price,
+                mark_price=execution_price,
+            )
             close_structured_position(
                 position_id=contract,
                 price=execution_price,
-                pnl=pnl,
+                pnl=net_pnl,
+                cumulative_fees=total_fees,
+                cumulative_slippage_cost=total_slippage,
             )
         except Exception:
             pass
@@ -410,16 +572,26 @@ class GateLiveBroker:
             logger.info("[LIVE] Cancelled conditional orders for %s", contract)
             self._sl_order_ids.pop(contract, None)
             self._sl_prices.pop(contract, None)
+            self._tp_order_ids.pop(contract, None)
+            self._tp_prices.pop(contract, None)
         except Exception as cancel_exc:
             logger.warning("[LIVE] Cancel conditional orders failed (non-blocking): %s", cancel_exc)
 
         # Sync positions after close
         self.sync_positions()
 
+        # Write equity snapshot for drawdown tracking
+        try:
+            equity = self.equity
+            if equity > 0:
+                write_equity_snapshot(equity=equity, realized_pnl=net_pnl, trade_mode="live")
+        except Exception:
+            pass
+
         return {
             "ok": True,
             "symbol": symbol,
-            "pnl": pnl,
+            "pnl": net_pnl,
             "execution_price": execution_price,
             "execution_price_actual": execution_price,
             "gate_order_id": order_id,
@@ -462,21 +634,53 @@ class GateLiveBroker:
         if target is None:
             return {"ok": False, "symbol": symbol, "error": "no_position"}
 
-        # Cancel old conditional orders
-        try:
-            _gate_private_request(
-                "DELETE",
-                f"{GATE_FUTURES_PRICE_ORDERS_PATH}?contract={contract}&status=open",
-                api_key=api_key,
-                api_secret=api_secret,
-            )
-        except Exception:
-            pass
+        # Cancel ONLY the old SL order (by tracked ID), preserving TP
+        sl_id = self._sl_order_ids.get(contract)
+        if sl_id:
+            try:
+                _gate_private_request(
+                    "DELETE",
+                    f"{GATE_FUTURES_PRICE_ORDERS_PATH}/{sl_id}",
+                    api_key=api_key,
+                    api_secret=api_secret,
+                )
+            except Exception:
+                pass
+        else:
+            # No tracked SL ID — fetch conditional orders, cancel only the SL one
+            try:
+                cond_orders = self._fetch_conditional_orders()
+                for co in cond_orders:
+                    co_contract = str(co.get("initial", {}).get("contract", "") or co.get("contract", ""))
+                    if co_contract != contract:
+                        continue
+                    trigger = float(co.get("trigger", {}).get("price", 0) or 0)
+                    co_id = str(co.get("id", ""))
+                    if not co_id or trigger <= 0:
+                        continue
+                    # Identify SL: for short, trigger > mark; for long, trigger < mark
+                    is_sl = (trigger > target.mark_price) if target.side == "short" else (trigger < target.mark_price)
+                    if is_sl:
+                        try:
+                            _gate_private_request(
+                                "DELETE",
+                                f"{GATE_FUTURES_PRICE_ORDERS_PATH}/{co_id}",
+                                api_key=api_key,
+                                api_secret=api_secret,
+                            )
+                        except Exception:
+                            pass
+                        break
+            except Exception:
+                pass
 
         # Place new SL
         try:
             sl_size = -target.qty if target.side == "long" else target.qty
-            sl_rule = 1 if target.side == "long" else 2
+            # Gate rule: 1 = price <= trigger
+            # Long SL (price drops): trigger < mark, rule=1
+            # Short SL (price rises): trigger > mark, rule=1
+            sl_trigger = _round_price_tick(new_sl_price, contract)
             sl_body = json.dumps({
                 "contract": contract,
                 "initial": {
@@ -484,14 +688,12 @@ class GateLiveBroker:
                     "size": sl_size,
                     "price": "0",
                     "tif": "ioc",
-                    "close": True,
                     "reduce_only": True,
                 },
                 "trigger": {
-                    "price": str(new_sl_price),
-                    "rule": sl_rule,
+                    "price": str(sl_trigger),
+                    "rule": 1,
                 },
-                "order_type": "market",
             })
             sl_result = _gate_private_request(
                 "POST",
@@ -510,30 +712,159 @@ class GateLiveBroker:
             logger.warning("[LIVE] SL update failed for %s: %s", contract, exc)
             return {"ok": False, "symbol": symbol, "error": str(exc)}
 
+    def _fetch_conditional_orders(self) -> list[dict[str, Any]]:
+        """Fetch open conditional orders (SL/TP) from Gate."""
+        try:
+            api_key, api_secret = self._creds()
+            resp = _gate_private_request(
+                "GET",
+                GATE_FUTURES_PRICE_ORDERS_PATH,
+                api_key=api_key,
+                api_secret=api_secret,
+                query_string="status=open",
+            )
+            if isinstance(resp, list):
+                return resp
+        except Exception:
+            pass
+        return []
+
     def snapshot(self) -> dict[str, Any]:
-        """Return current account + positions snapshot."""
+        """Return current account + positions snapshot with computed fields."""
         self.sync_positions()
+        # Fetch real account data for equity
+        account_info: dict[str, Any] = {"equity": self.equity}
+        raw_account: dict[str, Any] = {}
+        try:
+            api_key, api_secret = self._creds()
+            raw_account = fetch_futures_account(api_key, api_secret)
+            account_info = {
+                "equity": float(raw_account.get("available", 0)) + float(raw_account.get("unrealised_pnl", 0)),
+                "available_balance": float(raw_account.get("available", 0)),
+                "margin_used": float(raw_account.get("position_margin", 0)) + float(raw_account.get("order_margin", 0)),
+                "unrealized_pnl": float(raw_account.get("unrealised_pnl", 0)),
+                "realized_pnl": 0,
+            }
+        except Exception:
+            pass
+
+        # Fetch conditional orders for SL/TP
+        cond_orders = self._fetch_conditional_orders()
+        sl_tp_by_contract: dict[str, dict[str, float]] = {}
+        for co in cond_orders:
+            contract = str(co.get("initial", {}).get("contract", "") or co.get("contract", ""))
+            if not contract:
+                continue
+            trigger_price = float(co.get("trigger", {}).get("price", 0) or 0)
+            if trigger_price <= 0:
+                continue
+            rule = int(co.get("trigger", {}).get("rule", 0) or 0)
+            entry = sl_tp_by_contract.setdefault(contract, {})
+            # rule=1: price <= trigger (SL for short, TP for short)
+            # rule=2: price >= trigger (SL for long, TP for long)
+            # Distinguish SL vs TP by comparing to mark price
+            pos = next((p for p in self._positions if p.symbol == contract), None)
+            if pos:
+                if pos.side == "short":
+                    # Short: SL is above price (trigger > mark), TP is below
+                    if trigger_price > pos.mark_price:
+                        entry["sl"] = trigger_price
+                    else:
+                        entry["tp"] = trigger_price
+                else:
+                    # Long: SL is below price (trigger < mark), TP is above
+                    if trigger_price < pos.mark_price:
+                        entry["sl"] = trigger_price
+                    else:
+                        entry["tp"] = trigger_price
+
+        equity = account_info.get("equity", self.equity)
+
+        # Build lookup from raw Gate position data
+        raw_by_contract: dict[str, dict[str, Any]] = {}
+        for rp in self._raw_positions:
+            contract = str(rp.get("contract", ""))
+            if contract:
+                raw_by_contract[contract] = rp
+
+        positions_out = []
+        for p in self._positions:
+            raw = raw_by_contract.get(p.symbol, {})
+            notional = p.mark_price * p.qty
+            # Use Gate's actual margin field (cross-margin real amount)
+            initial_margin = abs(float(raw.get("margin", 0)))
+            if initial_margin <= 0:
+                initial_margin = notional / p.leverage if p.leverage > 0 else notional
+            # Maintenance margin: initial_margin * maintenance_rate
+            maint_rate = float(raw.get("maintenance_rate", 0.005))
+            maintenance_margin = initial_margin * maint_rate
+            # Unrealized PnL from Gate directly (already in USDT for quanto contracts)
+            unrealized_pnl = float(raw.get("unrealised_pnl", 0))
+            if unrealized_pnl == 0:
+                quanto_multiplier = _get_quanto_multiplier(p.symbol)
+                unrealized_pnl = (
+                    (p.mark_price - p.entry_price) * p.qty * quanto_multiplier if p.side == "long"
+                    else (p.entry_price - p.mark_price) * p.qty * quanto_multiplier
+                )
+            pnl_return_ratio = unrealized_pnl / initial_margin if initial_margin > 0 else 0
+            # Liquidation price from Gate directly
+            liq_price = float(raw.get("liq_price", 0))
+            if liq_price <= 0 and p.leverage > 0:
+                liq_price = (
+                    p.entry_price * (1 - 1 / p.leverage) if p.side == "long"
+                    else p.entry_price * (1 + 1 / p.leverage)
+                )
+            liq_distance = (
+                abs(p.mark_price - liq_price) / p.mark_price if p.mark_price > 0 and liq_price > 0
+                else 0
+            )
+
+            sl_tp = sl_tp_by_contract.get(p.symbol, {})
+            positions_out.append({
+                "position_id": p.position_id,
+                "symbol": p.symbol,
+                "side": p.side,
+                "leverage": p.leverage,
+                "qty": p.qty,
+                "entry_price": p.entry_price,
+                "mark_price": p.mark_price,
+                "notional": notional,
+                "initial_margin": initial_margin,
+                "margin_used": initial_margin,
+                "maintenance_margin": maintenance_margin,
+                "unrealized_pnl": unrealized_pnl,
+                "pnl_return_ratio": pnl_return_ratio,
+                "liquidation_price": liq_price,
+                "liquidation_distance_ratio": liq_distance,
+                "stop_loss_price": sl_tp.get("sl"),
+                "take_profit_price": sl_tp.get("tp"),
+            })
+
+        # Compute account-level aggregates
+        total_notional = sum(p["notional"] for p in positions_out)
+        margin_used_total = sum(p["initial_margin"] for p in positions_out)
+        unrealized_total = sum(p["unrealized_pnl"] for p in positions_out)
+        margin_ratio = margin_used_total / equity if equity > 0 else 0
+        exposure_ratio = total_notional / equity if equity > 0 else 0
+        account_info["margin_ratio"] = margin_ratio
+        account_info["open_positions"] = len(positions_out)
+        account_info["total_notional"] = total_notional
+        account_info["exposure_ratio"] = exposure_ratio
+        account_info["margin_used"] = margin_used_total
+        account_info["unrealized_pnl"] = unrealized_total
+
         return {
-            "account": {"equity": self.equity},
-            "positions": [
-                {
-                    "position_id": p.position_id,
-                    "symbol": p.symbol,
-                    "side": p.side,
-                    "leverage": p.leverage,
-                    "qty": p.qty,
-                    "entry_price": p.entry_price,
-                    "mark_price": p.mark_price,
-                    "notional": p.mark_price * p.qty,
-                }
-                for p in self._positions
-            ],
+            "account": account_info,
+            "positions": positions_out,
             "orders": [o.__dict__ for o in self._orders[-20:]],
         }
 
     def reset(self) -> None:
         """Clear local cache (does NOT affect Gate positions)."""
         self._positions = []
+        self._raw_positions = []
         self._orders = []
         self._sl_order_ids = {}
         self._sl_prices = {}
+        self._tp_order_ids = {}
+        self._tp_prices = {}

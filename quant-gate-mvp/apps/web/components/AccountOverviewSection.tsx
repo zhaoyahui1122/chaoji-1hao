@@ -33,17 +33,15 @@ export default function AccountOverviewSection({ account }: { account: Dashboard
         <p style={{ ...sectionHintStyle, color: '#94a3b8' }}>把权益、保证金、敞口和盈亏压缩进一组总览指标，先看账户安全边界，再看交易动作。</p>
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, minmax(0, 1fr))', gap: 16, marginBottom: 16 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 16, marginBottom: 16 }}>
         <MetricCard label="账户权益" value={formatMoney(account.equity)} chip="Equity" />
         <MetricCard label="可用余额" value={formatMoney(account.available_balance)} chip="Balance" />
         <MetricCard label="保证金占用" value={formatMoney(account.margin_used)} footnote={`占用率 ${(account.margin_ratio * 100).toFixed(2)}%`} />
-        <MetricCard label="总名义敞口" value={formatMoney(account.total_notional)} footnote={`敞口 / 权益 ${(account.exposure_ratio * 100).toFixed(2)}%`} />
         <MetricCard label="未实现盈亏" value={formatMoney(account.unrealized_pnl)} positive={account.unrealized_pnl >= 0} footnote="浮动收益随标记价变化" />
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, minmax(0, 1fr))', gap: 16 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 16 }}>
         <MetricCard label="保证金率" value={`${(account.margin_ratio * 100).toFixed(2)}%`} positive={account.margin_ratio < 1} footnote="低于 100% 更安全" />
-        <MetricCard label="敞口 / 权益" value={`${(account.exposure_ratio * 100).toFixed(2)}%`} footnote="观察整体仓位激进程度" />
         <MetricCard label="持仓数量" value={String(account.open_positions)} footnote="当前未平仓仓位数" />
         <MetricCard label="已实现盈亏" value={formatMoney(account.realized_pnl)} positive={account.realized_pnl >= 0} footnote="历史平仓后的累计结果" />
         <MetricCard label="账户状态" value={account.margin_ratio >= 1 ? '高风险' : '正常'} positive={account.margin_ratio < 1} footnote={account.margin_ratio >= 1 ? '建议立刻降杠杆或减仓' : '当前风险可控'} />

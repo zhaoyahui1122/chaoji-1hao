@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type React from 'react'
 import {
+  closeLivePosition,
   connectLiveAccount,
   getLiveAccountStatus,
   refreshLiveAccount,
@@ -16,6 +17,7 @@ export default function LiveAccountShell({ inline = false }: { inline?: boolean 
   const [loading, setLoading] = useState(true)
   const [connecting, setConnecting] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
+  const [closingSymbol, setClosingSymbol] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
 
   const [apiKey, setApiKey] = useState('')
@@ -85,6 +87,20 @@ export default function LiveAccountShell({ inline = false }: { inline?: boolean 
       setError(err.message || '刷新失败')
     } finally {
       setRefreshing(false)
+    }
+  }
+
+  const handleClose = async (symbol: string) => {
+    if (closingSymbol) return
+    setClosingSymbol(symbol)
+    try {
+      await closeLivePosition(symbol)
+      const data = await refreshLiveAccount()
+      setStatus(data)
+    } catch (err: any) {
+      setError(err.message || '平仓失败')
+    } finally {
+      setClosingSymbol(null)
     }
   }
 
@@ -227,13 +243,15 @@ export default function LiveAccountShell({ inline = false }: { inline?: boolean 
             </div>
 
             {/* Positions table */}
+            {(() => { const activePositions = status.positions.filter(p => p.size > 0); return (
+            <>
             <div style={tableHeaderStyle}>
               <h3 style={sectionTitleStyle}>当前持仓</h3>
               <span style={positionCountStyle}>
-                {status.positions.length > 0 ? `${status.positions.length} 个持仓` : '无持仓'}
+                {activePositions.length > 0 ? `${activePositions.length} 个持仓` : '无持仓'}
               </span>
             </div>
-            {status.positions.length > 0 && (
+            {activePositions.length > 0 && (
               <div style={tableWrapperStyle}>
                 <table style={tableStyle}>
                   <thead>
@@ -245,11 +263,12 @@ export default function LiveAccountShell({ inline = false }: { inline?: boolean 
                       <th style={thStyle}>开仓价</th>
                       <th style={thStyle}>标记价</th>
                       <th style={thStyle}>未实现盈亏</th>
+                      <th style={thStyle}>操作</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {status.positions.map((pos) => (
-                      <tr key={pos.symbol} style={trStyle}>
+                    {activePositions.map((pos) => (
+                      <tr key={`${pos.symbol}-${pos.side}`} style={trStyle}>
                         <td style={tdStyle}>{pos.symbol}</td>
                         <td style={tdStyle}>
                           <span style={pos.side === 'long' ? sideLongStyle : sideShortStyle}>
@@ -263,12 +282,26 @@ export default function LiveAccountShell({ inline = false }: { inline?: boolean 
                         <td style={{ ...tdStyle, color: pos.unrealized_pnl >= 0 ? '#86efac' : '#fca5a5' }}>
                           {fmtPnl(pos.unrealized_pnl)}
                         </td>
+                        <td style={tdStyle}>
+                          <button
+                            style={{
+                              ...closeButtonStyle,
+                              ...(closingSymbol === pos.symbol ? disabledStyle : {}),
+                            }}
+                            disabled={closingSymbol === pos.symbol}
+                            onClick={() => handleClose(pos.symbol)}
+                          >
+                            {closingSymbol === pos.symbol ? '平仓中…' : '一键平仓'}
+                          </button>
+                        </td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
               </div>
             )}
+            </>
+            )})()}
 
             {/* Footer */}
             <div style={footerStyle}>
@@ -575,6 +608,18 @@ const sideShortStyle: React.CSSProperties = {
   color: '#fca5a5',
   fontWeight: 700,
   fontSize: 13,
+}
+
+const closeButtonStyle: React.CSSProperties = {
+  padding: '6px 14px',
+  borderRadius: 10,
+  border: 0,
+  background: '#dc2626',
+  color: '#fff',
+  fontWeight: 700,
+  fontSize: 12,
+  cursor: 'pointer',
+  whiteSpace: 'nowrap',
 }
 
 const footerStyle: React.CSSProperties = {

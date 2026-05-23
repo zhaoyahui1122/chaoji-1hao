@@ -64,7 +64,8 @@ def _gate_private_request(
     if response.status_code in (401, 403):
         raise RuntimeError("gate_live_auth_failed")
     if response.status_code >= 400:
-        raise RuntimeError(f"gate_live_request_failed: status_{response.status_code}")
+        detail = response.text[:200] if response.text else ""
+        raise RuntimeError(f"gate_live_request_failed: status_{response.status_code} {detail}")
 
     try:
         return response.json()

@@ -49,9 +49,9 @@ import {
   twoColBalancedStyle,
   twoColWideStyle,
 } from '../components/dashboard-layout-styles'
-import { buildLiveAccountOverview, buildAccountFromLiveStatus } from '../components/dashboard-utils'
+import { buildLiveAccountOverview } from '../components/dashboard-utils'
 import { useDashboardPageData } from '../components/useDashboardPageData'
-import { getLiveAccountStatus, type LiveAccountStatus } from '../lib/api'
+import { closeAllLivePositions, getLiveAccountStatus, type LiveAccountStatus } from '../lib/api'
 
 type WindowKey =
   | 'liveAccount'
@@ -65,7 +65,7 @@ type TradeMode = 'paper' | 'live'
 
 const WINDOW_OPTIONS: Array<{ key: WindowKey; label: string; description: string; eyebrow: string }> = [
   { key: 'liveAccount', label: '合约实盘账户', description: 'Gate 合约真实账户连接状态、总览与持仓', eyebrow: 'Live' },
-  { key: 'positions', label: '持仓总览', description: '当前账户、仓位、风险暴露与市场参考', eyebrow: 'Overview' },
+  { key: 'positions', label: '持仓总览', description: '当前账户、仓位与市场参考', eyebrow: 'Overview' },
   { key: 'strategy', label: '策略控制台', description: '策略参数、回测、Runner 与风控总控', eyebrow: 'Strategy' },
   { key: 'paper', label: '交易', description: '实盘账户连接与纸面仓位模拟交易', eyebrow: 'Trade' },
   { key: 'equity', label: '权益曲线', description: '账户权益变化与回撤观察', eyebrow: 'Equity' },
@@ -102,6 +102,7 @@ export default function HomePage() {
     handleMarkPaper,
     handleClosePaper,
     handleResetPaper,
+    reloadDashboard,
     setHistoryFilters,
   } = useDashboardPageData()
 
@@ -165,6 +166,17 @@ export default function HomePage() {
     setRobotState({ running: false, baselinePositionIds: [] })
   }
 
+  async function handleCloseAll() {
+    if (tradeMode === 'live') {
+      await closeAllLivePositions()
+    } else {
+      for (const pos of effectivePositions) {
+        await handleClosePaper({ symbol: pos.symbol as 'BTC_USDT' | 'ETH_USDT', price: pos.mark_price, position_id: pos.position_id ?? undefined })
+      }
+    }
+    await reloadDashboard()
+  }
+
   const positionsForOverview = useMemo(() => {
     const all = dashboard?.positions ?? []
     const bySymbol = robotState.symbol ? all.filter((item) => item.symbol === robotState.symbol) : all
@@ -177,19 +189,9 @@ export default function HomePage() {
     [dashboard, marketTickers],
   )
 
-  // 实盘模式下从 liveAccountStatus 构建总览和持仓
-  const liveModeData = useMemo(
-    () => {
-      if (tradeMode === 'live' && liveConnected && liveAccountStatus) {
-        return buildAccountFromLiveStatus(liveAccountStatus, marketTickers)
-      }
-      return null
-    },
-    [tradeMode, liveConnected, liveAccountStatus, marketTickers],
-  )
-
-  const effectiveAccount = liveModeData?.account ?? liveAccountOverview
-  const effectivePositions = liveModeData?.positions ?? dashboard?.positions ?? []
+  // 实盘/模拟均使用 dashboard 数据（后端 snapshot 已包含增强字段）
+  const effectiveAccount = liveAccountOverview
+  const effectivePositions = dashboard?.positions ?? []
 
   if (error) {
     return <main style={plainStateStyle}>加载失败：{error}</main>
@@ -206,20 +208,12 @@ export default function HomePage() {
     stopLossPct: selectedStrategyPreset?.config.stop_loss_pct ?? strategy.stop_loss_pct,
     takeProfitPct: selectedStrategyPreset?.config.take_profit_pct ?? strategy.take_profit_pct,
   }
-  const showLiveData = tradeMode === 'live' && liveConnected && liveAccountStatus?.account
-  const heroMiniStats = showLiveData
-    ? [
-        { label: '账户权益', value: `$${liveAccountStatus.account.equity.toFixed(2)}` },
-        { label: '可用余额', value: `$${liveAccountStatus.account.available_balance.toFixed(2)}` },
-        { label: '未实现盈亏', value: `$${liveAccountStatus.account.unrealized_pnl.toFixed(2)}` },
-        { label: '当前持仓数', value: `${liveAccountStatus.positions.length}` },
-      ]
-    : [
-        { label: '账户权益', value: `$${liveAccountOverview.equity.toFixed(2)}` },
-        { label: '可用余额', value: `$${liveAccountOverview.available_balance.toFixed(2)}` },
-        { label: '未实现盈亏', value: `$${liveAccountOverview.unrealized_pnl.toFixed(2)}` },
-        { label: '当前持仓数', value: `${dashboard.positions.length}` },
-      ]
+  const heroMiniStats = [
+    { label: '账户权益', value: `$${liveAccountOverview.equity.toFixed(2)}` },
+    { label: '可用余额', value: `$${liveAccountOverview.available_balance.toFixed(2)}` },
+    { label: '未实现盈亏', value: `$${liveAccountOverview.unrealized_pnl.toFixed(2)}` },
+    { label: '当前持仓数', value: `${dashboard.positions.length}` },
+  ]
 
   return (
     <main style={shellStyle}>
@@ -235,9 +229,8 @@ export default function HomePage() {
           </div>
 
           <div style={sidebarStatStackStyle}>
-            <MetricCard label="账户权益" value={`$${liveAccountOverview.equity.toFixed(2)}`} tone="cyan" />
-            <MetricCard label="风险暴露" value={`${(liveAccountOverview.exposure_ratio * 100).toFixed(2)}%`} tone="blue" />
-            <MetricCard label="最大回撤" value={dashboard.account.max_drawdown_pct != null ? `${(dashboard.account.max_drawdown_pct * 100).toFixed(2)}%` : '-'} tone={(dashboard.account.max_drawdown_pct ?? 0) > 0.1 ? 'amber' : 'slate'} />
+            <MetricCard label="账户权益" value={`$${effectiveAccount.equity.toFixed(2)}`} tone="cyan" />
+            <MetricCard label="最大回撤" value={effectiveAccount.max_drawdown_pct != null ? `${(effectiveAccount.max_drawdown_pct * 100).toFixed(2)}%` : '-'} tone={(effectiveAccount.max_drawdown_pct ?? 0) > 0.1 ? 'amber' : 'slate'} />
             <MetricCard label="Runner" value={
               dashboard.runner?.enabled
                 ? (tradeMode === 'live'
@@ -330,6 +323,7 @@ export default function HomePage() {
                   marketTickers={marketTickers}
                   riskConfig={overviewRiskConfig}
                   onClosePosition={handleClosePaper}
+                  onCloseAll={handleCloseAll}
                 />
               </div>
             )}
@@ -369,7 +363,7 @@ export default function HomePage() {
                       onSave={handleSave}
                       onRunBacktest={handleRunBacktest}
                       onRunStrategyOnce={handleRunStrategyOnce}
-                      onToggleRunner={handleToggleRunner}
+                      onToggleRunner={async (enabled, symbols, mode) => handleToggleRunner(enabled, symbols, mode ?? tradeMode)}
                       onResumeRunner={handleResumeRunner}
                       priceReference={strategyPriceReference}
                       strategySlotId={selectedStrategySlotId}
