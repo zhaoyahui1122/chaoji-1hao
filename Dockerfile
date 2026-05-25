@@ -7,5 +7,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY apps/api/app ./app
 
-EXPOSE 8012
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8012"]
+ENV PORT=8012
+EXPOSE ${PORT}
+CMD uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8012}
