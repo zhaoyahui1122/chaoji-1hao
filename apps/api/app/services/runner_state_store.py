@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -9,8 +10,9 @@ from app.services.db import load_kv, save_kv
 RUNNER_STATE_NAMESPACE = "runner"
 RUNNER_STATE_KEY = "state"
 
-RUNNER_STATE_PATH = Path(__file__).resolve().parents[4] / "state" / "runner_state.json"
-RUNNER_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+_STATE_DIR = Path(os.environ.get("STATE_DIR", str(Path(__file__).resolve().parents[2] / "state")))
+_STATE_DIR.mkdir(parents=True, exist_ok=True)
+RUNNER_STATE_PATH = _STATE_DIR / "runner_state.json"
 
 DEFAULT_RUNNER_STATE: dict[str, Any] = {
     "enabled": False,

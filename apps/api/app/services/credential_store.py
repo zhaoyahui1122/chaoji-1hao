@@ -11,7 +11,9 @@ from cryptography.fernet import Fernet
 from app.services.db import load_kv, save_kv
 
 _NS = "live_account"
-_KEY_FILE = Path(__file__).resolve().parents[4] / "state" / ".cred_key"
+_STATE_DIR = Path(os.environ.get("STATE_DIR", str(Path(__file__).resolve().parents[2] / "state")))
+_STATE_DIR.mkdir(parents=True, exist_ok=True)
+_KEY_FILE = _STATE_DIR / ".cred_key"
 
 
 def _get_or_create_fernet() -> Fernet:

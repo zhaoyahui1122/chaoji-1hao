@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any
 
 from app.services.db import load_kv, save_kv
 
-LOG_PATH = Path(__file__).resolve().parents[4] / "state" / "runner_logs.json"
-LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+_STATE_DIR = Path(os.environ.get("STATE_DIR", str(Path(__file__).resolve().parents[2] / "state")))
+_STATE_DIR.mkdir(parents=True, exist_ok=True)
+LOG_PATH = _STATE_DIR / "runner_logs.json"
 
 
 def _load_json_fallback() -> list[dict[str, Any]]:

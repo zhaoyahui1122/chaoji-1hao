@@ -1,15 +1,17 @@
 from __future__ import annotations
 
 import json
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from app.services.db import get_conn, load_kv, save_kv, init_db
 
-STRATEGY_STATE_PATH = Path(__file__).resolve().parents[4] / "state" / "strategy_config.json"
-STRATEGY_SLOTS_PATH = Path(__file__).resolve().parents[4] / "state" / "strategy_slots.json"
-STRATEGY_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+_STATE_DIR = Path(os.environ.get("STATE_DIR", str(Path(__file__).resolve().parents[2] / "state")))
+_STATE_DIR.mkdir(parents=True, exist_ok=True)
+STRATEGY_STATE_PATH = _STATE_DIR / "strategy_config.json"
+STRATEGY_SLOTS_PATH = _STATE_DIR / "strategy_slots.json"
 
 # 优化后的15分钟海龟策略预设参数（2026-05-02 15m ADX过滤优化结果）
 OPTIMIZED_TURTLE_PRESET = {

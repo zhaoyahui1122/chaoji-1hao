@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any
 
 from app.services.db import load_kv, save_kv
 
-STATE_PATH = Path(__file__).resolve().parents[4] / "state" / "paper_broker_state.json"
-STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+_STATE_DIR = Path(os.environ.get("STATE_DIR", str(Path(__file__).resolve().parents[2] / "state")))
+_STATE_DIR.mkdir(parents=True, exist_ok=True)
+STATE_PATH = _STATE_DIR / "paper_broker_state.json"
 
 PAPER_STATE_NAMESPACE = "paper"
 PAPER_STATE_KEY = "broker_state"
