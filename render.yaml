@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: quant-gate-api
+    runtime: docker
+    dockerfilePath: Dockerfile
+    dockerContext: apps/api
+    plan: free
+    envVars:
+      - key: PYTHONUNBUFFERED
+        value: "1"
+      - key: CORS_ORIGINS
+        sync: false  # 部署后手动填 Cloudflare Pages URL
+      - key: API_SECRET_KEY
+        generateValue: true
+      - key: DATABASE_URL
+        sync: false  # 如需 PostgreSQL 填连接串，否则不填用 SQLite
