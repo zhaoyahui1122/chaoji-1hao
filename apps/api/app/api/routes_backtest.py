@@ -1,13 +1,13 @@
 from datetime import UTC, datetime, timedelta
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 from typing import Any, Literal
 
 from app.backtest.engine import SimpleBacktester
+from app.core.rate_limit import limiter
 from app.core.settings import SETTINGS
 from app.services.market_data import get_ohlcv, timeframe_to_minutes, MarketDataUnavailableError
 from app.services.risk import leverage_risk_check
-from fastapi import HTTPException
 
 router = APIRouter()
 
@@ -113,7 +113,8 @@ class BacktestResponse(BaseModel):
 
 
 @router.post("", response_model=BacktestResponse)
-def run_backtest(payload: BacktestRequest):
+@limiter.limit("5/minute")
+def run_backtest(request: Request, payload: BacktestRequest):
     risk = leverage_risk_check(
         account_equity=payload.initial_balance,
         available_balance=payload.initial_balance,

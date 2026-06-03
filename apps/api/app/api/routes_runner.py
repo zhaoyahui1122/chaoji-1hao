@@ -1,7 +1,8 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 from pydantic import BaseModel, Field, field_validator
 from typing import Literal
 
+from app.core.rate_limit import limiter
 from app.services.strategy_runner import get_runner_logs, get_runner_status, resume_runner, run_strategy_cycle, set_runner_enabled
 from app.core.state import PAPER_BROKER
 
@@ -22,7 +23,7 @@ class RunnerRequest(BaseModel):
     timeframe: Timeframe = "15m"
     data_source: DataSource = "gate"
     trade_mode: TradeMode = "paper"
-    leverage: int = Field(default=5, ge=1, le=150)
+    leverage: int = Field(default=5, ge=1, le=20)
     allocated_margin: float = Field(default=1000, gt=0)
 
     # Classic strategy params
@@ -103,7 +104,8 @@ class RunnerToggleRequest(BaseModel):
 
 
 @router.post("/run-once")
-def run_once(payload: RunnerRequest):
+@limiter.limit("10/minute")
+def run_once(request: Request, payload: RunnerRequest):
     return run_strategy_cycle(payload.model_dump())
 
 
@@ -118,15 +120,18 @@ def status():
 
 
 @router.post("/toggle")
-def toggle(payload: RunnerToggleRequest):
+@limiter.limit("10/minute")
+def toggle(request: Request, payload: RunnerToggleRequest):
     return set_runner_enabled(payload.enabled, payload.symbols, trade_mode=payload.trade_mode)
 
 
 @router.post("/resume")
-def resume():
+@limiter.limit("10/minute")
+def resume(request: Request):
     return resume_runner()
 
 
 @router.post("/reset-paper")
-def reset_paper():
+@limiter.limit("10/minute")
+def reset_paper(request: Request):
     return PAPER_BROKER.reset()

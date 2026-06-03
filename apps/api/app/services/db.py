@@ -106,12 +106,73 @@ def _pg_get_conn():
 
 # ── SQLite backend ──────────────────────────────────────────────
 
-def _sqlite_get_conn() -> sqlite3.Connection:
-    conn = sqlite3.connect(DB_PATH, timeout=10)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA busy_timeout=5000")
-    return conn
+class _SqliteConnWrapper:
+    """Wraps sqlite3.Connection to match _PgConnWrapper interface."""
+
+    def __init__(self, conn):
+        self._conn = conn
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA busy_timeout=5000")
+
+    @property
+    def row_factory(self):
+        return self._conn.row_factory
+
+    @row_factory.setter
+    def row_factory(self, val):
+        self._conn.row_factory = val
+
+    def execute(self, sql, params=None):
+        self._cur = self._conn.execute(sql, params or ())
+        return self
+
+    def executemany(self, sql, param_list):
+        self._cur = self._conn.executemany(sql, param_list)
+        return self
+
+    def fetchone(self):
+        return self._cur.fetchone()
+
+    def fetchall(self):
+        return self._cur.fetchall()
+
+    @property
+    def lastrowid(self):
+        return self._cur.lastrowid
+
+    def commit(self):
+        self._conn.commit()
+
+    def rollback(self):
+        self._conn.rollback()
+
+    def close(self):
+        self._conn.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        if exc_type:
+            self._conn.rollback()
+        else:
+            self._conn.commit()
+        return False
+
+
+@contextmanager
+def _sqlite_get_conn():
+    raw = sqlite3.connect(DB_PATH, timeout=10)
+    wrapper = _SqliteConnWrapper(raw)
+    try:
+        yield wrapper
+        wrapper.commit()
+    except Exception:
+        wrapper.rollback()
+        raise
+    finally:
+        raw.close()
 
 
 # ── Unified API ─────────────────────────────────────────────────
