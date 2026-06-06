@@ -146,7 +146,7 @@ def load_structured_paper_state(default: dict[str, Any]) -> dict[str, Any] | Non
 
     if positions:
         return {
-            "initial_balance": float(latest_snapshot["initial_balance"]) if latest_snapshot else float(default.get("initial_balance", 10000.0)),
+            "initial_balance": float(latest_snapshot["initial_balance"]) if latest_snapshot else float(default.get("initial_balance", 1000.0)),
             "realized_pnl": float(latest_snapshot["realized_pnl"]) if latest_snapshot else float(default.get("realized_pnl", 0.0)),
             "positions": positions,
             "orders": orders,
@@ -262,7 +262,7 @@ def replace_structured_paper_state(data: dict[str, Any], account_snapshot: dict[
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
-                float(data.get("initial_balance", 10000.0)),
+                float(data.get("initial_balance", 1000.0)),
                 float(data.get("realized_pnl", 0.0)),
                 float(account_snapshot.get("equity", 0.0)),
                 float(account_snapshot.get("available_balance", 0.0)),
@@ -442,7 +442,7 @@ def write_equity_snapshot(equity: float, realized_pnl: float, trade_mode: str = 
                 margin_used, margin_ratio, unrealized_pnl, open_positions, trade_mode
             ) VALUES (?, ?, ?, ?, 0, 0, 0, 0, ?)
             """,
-            (10000.0, float(realized_pnl), float(equity), float(equity), trade_mode),
+            (1000.0, float(realized_pnl), float(equity), float(equity), trade_mode),
         )
         conn.commit()
 

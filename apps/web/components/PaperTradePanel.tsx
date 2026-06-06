@@ -13,7 +13,7 @@ import {
   validateStopLossAgainstLiquidation,
 } from './runner-ui-utils'
 
-const DEFAULT_ACCOUNT_EQUITY = 10000
+const DEFAULT_ACCOUNT_EQUITY = 1000
 
 type OpenMode = 'margin' | 'risk'
 
@@ -129,7 +129,7 @@ export default function PaperTradePanel({ onOpen, onMark, onClose, onReset, onRu
     return [
       formatStrategyTypeLabel(selectedPreset.config.strategy_type),
       `${selectedPreset.config.symbol}`,
-      '??????????????',
+      '实际杠杆以交易工作区选择为准',
       selectedPreset.config.strategy_type === 'turtle'
         ? `Entry ${selectedPreset.config.turtle_entry_period ?? '-'} / Exit ${selectedPreset.config.turtle_exit_period ?? '-'} / ATR ${selectedPreset.config.turtle_atr_period ?? '-'}`
         : `SL ${(selectedPreset.config.stop_loss_pct * 100).toFixed(2)}% / TP ${(selectedPreset.config.take_profit_pct * 100).toFixed(2)}% / Risk ${(selectedPreset.config.risk_per_trade_pct * 100).toFixed(2)}%`,

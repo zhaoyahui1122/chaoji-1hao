@@ -90,7 +90,10 @@ function testTradeDirectionModeOptions() {
   const options = getTradeDirectionModeOptions()
   assert.equal(options.length, 3)
   assert.deepEqual(options.map((item) => item.value), ['long_only', 'short_only', 'auto'])
+  assert.deepEqual(options.map((item) => item.label), ['\u53ea\u505a\u591a', '\u53ea\u505a\u7a7a', '\u81ea\u52a8\u5224\u65ad'])
+  assert.equal(options.some((item) => item.label.includes('?')), false)
 }
+
 
 function testStopLossValidationAgainstLiquidation() {
   assert.equal(getEstimatedLiquidationBufferPct(100), 0.005)
@@ -127,8 +130,10 @@ function testPresetSummaryUsesCurrentRuntimeLeverage() {
   })
 
   assert.equal(summary.includes('50x'), true)
-  assert.equal(summary.includes('50x'), true)
+  assert.equal(summary.includes('\u5b9e\u9645\u6760\u6746\u4ee5\u4ea4\u6613\u5de5\u4f5c\u533a\u9009\u62e9\u4e3a\u51c6'), true)
+  assert.equal(summary.includes('?'), false)
 }
+
 
 function testRunnerStartProbeBlocksRejectedOrFailedFirstRun() {
   assert.equal(

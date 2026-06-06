@@ -70,7 +70,7 @@ class BacktestResult:
 
 
 class SimpleBacktester:
-    def __init__(self, initial_balance: float = 10000):
+    def __init__(self, initial_balance: float = 1000):
         self.initial_balance = initial_balance
 
     @staticmethod

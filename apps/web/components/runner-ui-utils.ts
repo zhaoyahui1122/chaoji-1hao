@@ -10,9 +10,9 @@ export function shouldStartRunnerForTradeAction(runMode: 'manual' | 'auto'): boo
 
 export function getTradeDirectionModeOptions(): Array<{ value: TradeDirectionMode; label: string }> {
   return [
-    { value: 'long_only', label: '???' },
-    { value: 'short_only', label: '???' },
-    { value: 'auto', label: '??' },
+    { value: 'long_only', label: '只做多' },
+    { value: 'short_only', label: '只做空' },
+    { value: 'auto', label: '自动判断' },
   ]
 }
 
@@ -41,16 +41,16 @@ export function getRunnerStartBlockReasonAfterProbe(payload: RunnerProbeLike | n
 
   const nested = payload.result
   if (nested && (nested.ok === false || nested.error || nested.reason)) {
-    return `????????${compactRunnerProbeReason(nested)}`
+    return `启动前检查失败：${compactRunnerProbeReason(nested)}`
   }
 
   if (payload.ok === false) {
-    return `???????${compactRunnerProbeReason(payload)}`
+    return `启动前检查失败：${compactRunnerProbeReason(payload)}`
   }
 
   const action = String(payload.action || '')
   if (['rejected', 'error', 'halted'].includes(action)) {
-    return `????????${compactRunnerProbeReason(payload)}`
+    return `启动前检查被拒绝：${compactRunnerProbeReason(payload)}`
   }
 
   return null
@@ -94,10 +94,10 @@ export function formatSelectedPresetRuntimeSummary(params: {
   strategyType?: 'classic' | 'turtle' | 'ict'
 }) {
   const details = params.strategyType === 'turtle'
-    ? ` ? Entry ${params.turtleEntryPeriod ?? '-'} ? Exit ${params.turtleExitPeriod ?? '-'} ? ATR ${params.turtleAtrPeriod ?? '-'}`
-    : ` ? stop loss ${(params.stopLossPct * 100).toFixed(2)}% ? risk ${(params.riskPerTradePct * 100).toFixed(2)}%`
+    ? ` | Entry ${params.turtleEntryPeriod ?? '-'} | Exit ${params.turtleExitPeriod ?? '-'} | ATR ${params.turtleAtrPeriod ?? '-'}`
+    : ` | stop loss ${(params.stopLossPct * 100).toFixed(2)}% | risk ${(params.riskPerTradePct * 100).toFixed(2)}%`
 
-  return `????? ${params.slotId} ? ${params.name} ? ${params.strategyTypeLabel} ? ?????? ${params.currentLeverage}x${details}`
+  return `已加载策略 ${params.slotId} | ${params.name} | ${params.strategyTypeLabel} | 实际杠杆以交易工作区选择为准 ${params.currentLeverage}x${details}`
 }
 
 export function formatStrategySlotCardSummary(params: {
@@ -106,12 +106,12 @@ export function formatStrategySlotCardSummary(params: {
   strategyType: 'classic' | 'turtle' | 'ict'
 }) {
   const strategyTypeLabel = params.strategyType === 'turtle'
-    ? '??'
+    ? '海龟'
     : params.strategyType === 'ict'
-      ? 'ICT???'
-      : '??'
+      ? 'ICT三周期'
+      : '经典'
 
-  return `${params.symbols.join(' / ')} ? ${params.timeframe} ? ${strategyTypeLabel}`
+  return `${params.symbols.join(' / ')} | ${params.timeframe} | ${strategyTypeLabel}`
 }
 
 const MAINTENANCE_MARGIN_RATIO = 0.005

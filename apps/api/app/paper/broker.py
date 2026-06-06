@@ -48,7 +48,7 @@ class PaperOrder:
 
 @dataclass
 class PaperBroker:
-    initial_balance: float = 10000.0
+    initial_balance: float = SETTINGS.initial_balance
     realized_pnl: float = 0.0
     positions: list[PaperPosition] = field(default_factory=list)
     orders: list[PaperOrder] = field(default_factory=list)
