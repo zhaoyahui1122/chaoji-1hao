@@ -7,7 +7,7 @@ from uuid import uuid4
 
 from app.core.settings import SETTINGS
 from app.services.contract_metrics import build_account_overview, build_position_metrics
-from app.services.paper_store import append_order_event, close_structured_position, load_structured_paper_state, replace_structured_paper_state, reset_structured_paper_state
+from app.services.paper_store import append_order_event, close_structured_position, get_drawdown_summary, load_structured_paper_state, replace_structured_paper_state, reset_structured_paper_state
 from app.services.runner_state_store import export_runner_state
 from app.services.risk import apply_slippage, calc_fee, calc_max_loss, calc_take_profit_price, leverage_risk_check
 from app.services.state_store import export_json_state
@@ -111,6 +111,7 @@ class PaperBroker:
             for p in self.positions
         ]
         account = build_account_overview(self.equity, metrics_positions, realized_pnl=self.realized_pnl)
+        account = account.model_copy(update=get_drawdown_summary("paper"))
         replace_structured_paper_state(payload, account.model_dump())
         export_json_state(payload)
 
@@ -128,6 +129,7 @@ class PaperBroker:
             for p in self.positions
         ]
         account = build_account_overview(self.equity, metrics_positions, realized_pnl=self.realized_pnl)
+        account = account.model_copy(update=get_drawdown_summary("paper"))
         active_position_ids = {position.position_id for position in self.positions}
         active_orders = [o.__dict__ for o in self.orders if o.position_id in active_position_ids]
         return {

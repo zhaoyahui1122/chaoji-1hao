@@ -10,7 +10,7 @@ from app.services.db import load_kv, save_kv
 RUNNER_STATE_NAMESPACE = "runner"
 RUNNER_STATE_KEY = "state"
 
-_STATE_DIR = Path(os.environ.get("STATE_DIR", str(Path(__file__).resolve().parents[2] / "state")))
+_STATE_DIR = Path(os.environ.get("STATE_DIR", str(Path(__file__).resolve().parents[4] / "state")))
 _STATE_DIR.mkdir(parents=True, exist_ok=True)
 RUNNER_STATE_PATH = _STATE_DIR / "runner_state.json"
 

@@ -3,6 +3,7 @@ from pydantic import BaseModel, Field
 from typing import Literal
 
 from app.core.state import PAPER_BROKER
+from app.services.strategy_runner import reset_runner_runtime_state
 from app.services.risk import build_risk_sized_order
 from app.services.contract_metrics import reset_drawdown_tracker
 
@@ -46,6 +47,7 @@ class ClosePositionRequest(BaseModel):
 @router.post("/reset")
 def reset_paper():
     reset_drawdown_tracker()
+    reset_runner_runtime_state(trade_mode="paper")
     return PAPER_BROKER.reset()
 
 
@@ -56,6 +58,7 @@ class ResetPaperRequest(BaseModel):
 @router.post("/reset-custom")
 def reset_paper_custom(payload: ResetPaperRequest):
     reset_drawdown_tracker()
+    reset_runner_runtime_state(trade_mode="paper")
     return PAPER_BROKER.reset(initial_balance=payload.initial_balance)
 
 

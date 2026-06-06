@@ -11,6 +11,7 @@ GATE_FUTURES_CANDLES_URL = "https://api.gateio.ws/api/v4/futures/usdt/candlestic
 GATE_FUTURES_TICKERS_URL = "https://api.gateio.ws/api/v4/futures/usdt/tickers"
 GATE_RETRY_ATTEMPTS = 3
 GATE_RETRY_DELAY_SECONDS = 1.0
+GATE_MAX_CANDLES_PER_REQUEST = 2000
 
 
 def timeframe_to_gate_interval(timeframe: str) -> str:
@@ -26,6 +27,17 @@ def timeframe_to_gate_interval(timeframe: str) -> str:
 
 def symbol_to_gate_contract(symbol: str) -> str:
     return str(symbol).upper()
+
+
+def timeframe_to_seconds(timeframe: str) -> int:
+    mapping = {
+        "5m": 5 * 60,
+        "15m": 15 * 60,
+        "30m": 30 * 60,
+        "1h": 60 * 60,
+        "4h": 4 * 60 * 60,
+    }
+    return mapping.get(str(timeframe), 15 * 60)
 
 
 def _gate_get(url: str, params: dict[str, Any], timeout: float):
@@ -77,35 +89,55 @@ def fetch_gate_futures_candles(
     to_ts: int | None = None,
 ) -> pd.DataFrame:
     contract = symbol_to_gate_contract(symbol)
-    params: dict[str, Any] = {
+    base_params: dict[str, Any] = {
         "contract": contract,
         "interval": timeframe_to_gate_interval(timeframe),
     }
-    if from_ts is not None or to_ts is not None:
-        if from_ts is not None:
-            params["from"] = int(from_ts)
-        if to_ts is not None:
-            params["to"] = int(to_ts)
-    else:
-        params["limit"] = max(1, min(int(limit), 2000))
-    resp = _gate_get(GATE_FUTURES_CANDLES_URL, params=params, timeout=20)
-    resp.raise_for_status()
-    raw = resp.json()
 
-    rows = []
-    for item in raw:
-        if not isinstance(item, dict):
-            continue
-        rows.append(
-            {
-                "timestamp": int(item.get("t", 0)),
-                "volume": float(item.get("v", 0) or 0),
-                "close": float(item.get("c", 0) or 0),
-                "high": float(item.get("h", 0) or 0),
-                "low": float(item.get("l", 0) or 0),
-                "open": float(item.get("o", 0) or 0),
+    def fetch_rows(request_params: dict[str, Any]) -> list[dict[str, float | int]]:
+        resp = _gate_get(GATE_FUTURES_CANDLES_URL, params=request_params, timeout=20)
+        resp.raise_for_status()
+        raw = resp.json()
+
+        rows: list[dict[str, float | int]] = []
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+            rows.append(
+                {
+                    "timestamp": int(item.get("t", 0)),
+                    "volume": float(item.get("v", 0) or 0),
+                    "close": float(item.get("c", 0) or 0),
+                    "high": float(item.get("h", 0) or 0),
+                    "low": float(item.get("l", 0) or 0),
+                    "open": float(item.get("o", 0) or 0),
+                }
+            )
+        return rows
+
+    rows: list[dict[str, float | int]] = []
+    if from_ts is not None or to_ts is not None:
+        step_seconds = timeframe_to_seconds(timeframe)
+        normalized_from = int(from_ts) if from_ts is not None else int(to_ts) - (step_seconds * (max(1, int(limit)) - 1))
+        normalized_to = int(to_ts) if to_ts is not None else normalized_from + (step_seconds * (max(1, int(limit)) - 1))
+        chunk_span_seconds = step_seconds * (GATE_MAX_CANDLES_PER_REQUEST - 1)
+        cursor = normalized_from
+
+        while cursor <= normalized_to:
+            chunk_to = min(normalized_to, cursor + chunk_span_seconds)
+            request_params = {
+                **base_params,
+                "from": int(cursor),
+                "to": int(chunk_to),
             }
-        )
+            rows.extend(fetch_rows(request_params))
+            cursor = chunk_to + step_seconds
+    else:
+        request_params = {
+            **base_params,
+            "limit": max(1, min(int(limit), GATE_MAX_CANDLES_PER_REQUEST)),
+        }
+        rows = fetch_rows(request_params)
 
     df = pd.DataFrame(rows, columns=["timestamp", "volume", "close", "high", "low", "open"])
     if not df.empty:

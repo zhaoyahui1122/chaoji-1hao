@@ -1,5 +1,6 @@
 "use client"
 
+import type { FormEvent } from 'react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import AccountOverviewSection from '../components/AccountOverviewSection'
@@ -45,13 +46,22 @@ import {
   shellStyle,
   sidebarStatStackStyle,
   sidebarStyle,
+  rightRailStackStyle,
   strategyBannerStyle,
   twoColBalancedStyle,
   twoColWideStyle,
 } from '../components/dashboard-layout-styles'
-import { buildLiveAccountOverview } from '../components/dashboard-utils'
+import { deriveTradingWorkspaceSnapshot } from '../components/dashboard-utils'
 import { useDashboardPageData } from '../components/useDashboardPageData'
-import { closeAllLivePositions, getLiveAccountStatus, type LiveAccountStatus } from '../lib/api'
+import {
+  closeAllLivePositions,
+  getLiveAccountStatus,
+  getSession,
+  login,
+  logout,
+  type LiveAccountStatus,
+  type SessionResponse,
+} from '../lib/api'
 
 type WindowKey =
   | 'liveAccount'
@@ -72,7 +82,7 @@ const WINDOW_OPTIONS: Array<{ key: WindowKey; label: string; description: string
   { key: 'positionsHistory', label: '持仓历史', description: '已结束持仓结果与执行摘要', eyebrow: 'History' },
 ]
 
-export default function HomePage() {
+function DashboardPageInner({ session, onLogout }: { session: SessionResponse; onLogout: () => Promise<void> }) {
   const {
     dashboard,
     strategy,
@@ -95,6 +105,7 @@ export default function HomePage() {
     handleAddStrategySlot,
     handleDeleteStrategySlot,
     handleRunBacktest,
+    clearBacktest,
     handleRunStrategyOnce,
     handleToggleRunner,
     handleResumeRunner,
@@ -110,6 +121,7 @@ export default function HomePage() {
   const [tradeMode, setTradeMode] = useState<TradeMode>('paper')
   const [liveAccountStatus, setLiveAccountStatus] = useState<LiveAccountStatus | null>(null)
   const livePollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const liveModeAutoSelectedRef = useRef(false)
   const [robotState, setRobotState] = useState<{
     running: boolean
     symbol?: 'BTC_USDT' | 'ETH_USDT'
@@ -132,12 +144,19 @@ export default function HomePage() {
 
   const liveConnected = liveAccountStatus?.connected ?? false
 
+  useEffect(() => {
+    if (liveConnected && !liveModeAutoSelectedRef.current) {
+      liveModeAutoSelectedRef.current = true
+      setTradeMode('live')
+    }
+  }, [liveConnected])
+
   // 从后端同步机器人运行状态（刷新页面后恢复）
   useEffect(() => {
-    if (dashboard?.runner?.enabled !== undefined) {
+    if (dashboard?.runner?.is_running !== undefined) {
       setRobotState((prev) => ({
         ...prev,
-        running: dashboard.runner!.enabled,
+        running: Boolean(dashboard.runner?.is_running),
       }))
     }
     // Runner 运行中时从后端状态同步 trade_mode（此时后端状态是权威来源）
@@ -145,7 +164,7 @@ export default function HomePage() {
     if (dashboard?.runner?.is_running && dashboard?.runner?.trade_mode) {
       setTradeMode(dashboard.runner.trade_mode)
     }
-  }, [dashboard?.runner?.enabled, dashboard?.runner?.is_running, dashboard?.runner?.trade_mode])
+  }, [dashboard?.runner?.is_running, dashboard?.runner?.trade_mode])
 
   // 同步 tradeMode 到历史记录筛选
   useEffect(() => {
@@ -184,20 +203,27 @@ export default function HomePage() {
     return robotState.running ? bySymbol.filter((item) => !baseline.has(item.position_id)) : []
   }, [dashboard?.positions, robotState])
 
-  const liveAccountOverview = useMemo(
-    () => dashboard ? buildLiveAccountOverview(dashboard.account, dashboard.positions, marketTickers) : null,
-    [dashboard, marketTickers],
+  const tradingWorkspaceSnapshot = useMemo(
+    () => dashboard
+      ? deriveTradingWorkspaceSnapshot({
+        dashboard,
+        tradeMode,
+        liveStatus: liveAccountStatus,
+        marketTickers,
+      })
+      : null,
+    [dashboard, liveAccountStatus, marketTickers, tradeMode],
   )
+  const usernameLabel = session.username || 'admin'
 
-  // 实盘/模拟均使用 dashboard 数据（后端 snapshot 已包含增强字段）
-  const effectiveAccount = liveAccountOverview
-  const effectivePositions = dashboard?.positions ?? []
+  const effectiveAccount = tradingWorkspaceSnapshot?.account
+  const effectivePositions = tradingWorkspaceSnapshot?.positions ?? []
 
   if (error) {
     return <main style={plainStateStyle}>加载失败：{error}</main>
   }
 
-  if (!dashboard || !strategy || !liveAccountOverview) {
+  if (!dashboard || !strategy || !effectiveAccount) {
     return <main style={plainStateStyle}>正在加载 Quant Gate 控制台...</main>
   }
 
@@ -209,11 +235,16 @@ export default function HomePage() {
     takeProfitPct: selectedStrategyPreset?.config.take_profit_pct ?? strategy.take_profit_pct,
   }
   const heroMiniStats = [
-    { label: '账户权益', value: `$${liveAccountOverview.equity.toFixed(2)}` },
-    { label: '可用余额', value: `$${liveAccountOverview.available_balance.toFixed(2)}` },
-    { label: '未实现盈亏', value: `$${liveAccountOverview.unrealized_pnl.toFixed(2)}` },
-    { label: '当前持仓数', value: `${dashboard.positions.length}` },
+    { label: '账户权益', value: `$${effectiveAccount.equity.toFixed(2)}` },
+    { label: '可用余额', value: `$${effectiveAccount.available_balance.toFixed(2)}` },
+    { label: '未实现盈亏', value: `$${effectiveAccount.unrealized_pnl.toFixed(2)}` },
+    { label: '当前持仓数', value: `${effectivePositions.length}` },
   ]
+  const runnerModeLabel = dashboard.runner?.enabled
+    ? (tradeMode === 'live'
+      ? (dashboard.runner?.is_running ? '实盘运行中' : '实盘已启用')
+      : (dashboard.runner?.is_running ? '模拟运行中' : '模拟已启用'))
+    : '未启动'
 
   return (
     <main style={shellStyle}>
@@ -257,9 +288,9 @@ export default function HomePage() {
                     onClick={() => setActiveWindow(item.key)}
                     style={{
                       ...navButtonStyle,
-                      border: active ? '1px solid rgba(56, 189, 248, 0.35)' : isLive ? '1px solid rgba(56, 189, 248, 0.24)' : '1px solid rgba(51, 65, 85, 0.95)',
-                      background: active ? 'linear-gradient(135deg, rgba(30,41,59,0.98) 0%, rgba(15,23,42,1) 100%)' : isLive ? 'linear-gradient(135deg, rgba(8,47,73,0.72) 0%, rgba(15,23,42,0.96) 100%)' : 'rgba(15,23,42,0.78)',
-                      boxShadow: active ? 'inset 0 0 0 1px rgba(125,211,252,0.15), 0 18px 34px rgba(2,8,23,0.35)' : isLive ? 'inset 0 0 0 1px rgba(125,211,252,0.1), 0 18px 34px rgba(2,8,23,0.26)' : 'none',
+                      border: active ? '1px solid rgba(255,255,255,0.12)' : '1px solid rgba(255,255,255,0.08)',
+                      background: active ? 'linear-gradient(135deg, rgba(31,35,41,0.98) 0%, rgba(18,20,24,1) 100%)' : 'rgba(15,17,22,0.82)',
+                      boxShadow: active ? 'inset 0 0 0 1px rgba(255,255,255,0.02), 0 8px 18px rgba(0,0,0,0.14)' : 'none',
                     }}
                   >
                     <div style={navEyebrowStyle}>{item.eyebrow}</div>
@@ -275,12 +306,46 @@ export default function HomePage() {
         <section style={contentStyle}>
           <section style={heroStyle}>
             <div>
-              <div style={heroPillStyle}>3001 风格控制台 / 深色工作台</div>
+              <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+                <div style={heroPillStyle}>3001 风格控制台 / 深色工作台</div>
+                <span style={chipStyle({ color: '#f8fafc', background: 'rgba(148,163,184,0.14)' })}>管理员：{usernameLabel}</span>
+                <span style={chipStyle({ color: '#f3f4f6', background: 'rgba(255,255,255,0.06)' })}>
+                  {tradeMode === 'live' ? 'LIVE' : 'PAPER'} / {runnerModeLabel}
+                </span>
+                <button
+                  onClick={() => { void onLogout() }}
+                  style={{
+                    border: '1px solid rgba(255,255,255,0.08)',
+                    background: 'rgba(255,255,255,0.04)',
+                    color: '#e5e7eb',
+                    borderRadius: 999,
+                    padding: '8px 14px',
+                    cursor: 'pointer',
+                    fontSize: 13,
+                  }}
+                >
+                  退出登录
+                </button>
+              </div>
               <h2 style={heroTitleStyle}>{activeWindowMeta.label}</h2>
               <p style={heroDescriptionStyle}>{activeWindowMeta.description}</p>
+              <div style={{ marginTop: 16, display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 10 }}>
+                <div style={{ padding: '12px 14px', borderRadius: 18, background: 'rgba(15,23,42,0.36)', border: '1px solid rgba(71,85,105,0.26)' }}>
+                  <div style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.08em', color: '#94a3b8' }}>活跃工作区</div>
+                  <div style={{ marginTop: 6, fontSize: 16, fontWeight: 800, color: '#f8fafc' }}>{activeWindowMeta.eyebrow}</div>
+                </div>
+                <div style={{ padding: '12px 14px', borderRadius: 18, background: 'rgba(15,23,42,0.36)', border: '1px solid rgba(71,85,105,0.26)' }}>
+                  <div style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.08em', color: '#94a3b8' }}>当前策略</div>
+                  <div style={{ marginTop: 6, fontSize: 16, fontWeight: 800, color: '#f8fafc' }}>{selectedStrategyPreset?.name || `策略 ${selectedStrategySlotId}`}</div>
+                </div>
+                <div style={{ padding: '12px 14px', borderRadius: 18, background: 'rgba(15,23,42,0.36)', border: '1px solid rgba(71,85,105,0.26)' }}>
+                  <div style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.08em', color: '#94a3b8' }}>市场模式</div>
+                  <div style={{ marginTop: 6, fontSize: 16, fontWeight: 800, color: '#f8fafc' }}>{tradeMode === 'live' ? '实盘联动' : '模拟联动'}</div>
+                </div>
+              </div>
               <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 14 }}>
-                <span style={chipStyle({ color: '#bae6fd', background: 'rgba(14,165,233,0.14)' })}>{strategyType || '-'}</span>
-                <span style={chipStyle({ color: '#d1fae5', background: 'rgba(16,185,129,0.14)' })}>
+                <span style={chipStyle({ color: '#e5e7eb', background: 'rgba(255,255,255,0.06)' })}>{strategyType || '-'}</span>
+                <span style={chipStyle({ color: '#e5e7eb', background: 'rgba(255,255,255,0.06)' })}>
                   {selectedStrategyPreset?.name || `策略 ${selectedStrategySlotId}`}
                 </span>
                 <span style={chipStyle({ color: '#cbd5e1', background: 'rgba(148,163,184,0.16)' })}>
@@ -300,7 +365,13 @@ export default function HomePage() {
             {activeWindow === 'liveAccount' && (
               <div style={darkPanelStyle}>
                 <SectionHeader title="合约实盘账户" hint="连接 Gate.io 真实合约账户，只读查看账户信息与持仓。" />
-                <LiveAccountShell inline />
+                <LiveAccountShell
+                  inline
+                  onStatusChange={(status) => {
+                    setLiveAccountStatus(status)
+                    if (status.connected) setTradeMode('live')
+                  }}
+                />
               </div>
             )}
 
@@ -362,6 +433,7 @@ export default function HomePage() {
                       recentOrders={recentOrders}
                       onSave={handleSave}
                       onRunBacktest={handleRunBacktest}
+                      onInvalidateBacktest={clearBacktest}
                       onRunStrategyOnce={handleRunStrategyOnce}
                       onToggleRunner={async (enabled, symbols, mode) => handleToggleRunner(enabled, symbols, mode ?? tradeMode)}
                       onResumeRunner={handleResumeRunner}
@@ -375,14 +447,38 @@ export default function HomePage() {
                     />
                   </div>
 
-                  <div style={darkPanelStyle}>
-                    <SectionHeader title="Runner 状态" hint="查看当前轮询状态与策略执行健康度。" />
-                    <RunnerStatusCard runner={dashboard.runner} />
+                  <div style={rightRailStackStyle}>
+                    <div style={darkPanelStyle}>
+                      <SectionHeader title="Runner 状态" hint="查看当前轮询状态与策略执行健康度。" />
+                      <RunnerStatusCard runner={dashboard.runner} />
+                    </div>
+                    <div style={darkPanelStyle}>
+                      <SectionHeader title="快速概览" hint="把策略、风控和运行状态压缩到右侧信息栏。" />
+                      <div style={{ display: 'grid', gap: 12 }}>
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                          <div style={{ padding: '14px 16px', borderRadius: 16, background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.06)' }}>
+                            <div style={{ fontSize: 11, color: '#9ca3af', textTransform: 'uppercase', letterSpacing: '0.08em' }}>策略类型</div>
+                            <div style={{ marginTop: 8, fontSize: 18, fontWeight: 800, color: '#f8fafc' }}>{strategyType === 'ict' ? 'ICT' : strategyType === 'turtle' ? '海龟' : '经典'}</div>
+                          </div>
+                          <div style={{ padding: '14px 16px', borderRadius: 16, background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.06)' }}>
+                            <div style={{ fontSize: 11, color: '#9ca3af', textTransform: 'uppercase', letterSpacing: '0.08em' }}>风险仓位</div>
+                            <div style={{ marginTop: 8, fontSize: 18, fontWeight: 800, color: '#f8fafc' }}>{(strategy.risk_per_trade_pct * 100).toFixed(2)}%</div>
+                          </div>
+                        </div>
+                        <div style={{ padding: '14px 16px', borderRadius: 16, background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.14)' }}>
+                          <div style={{ fontSize: 11, color: '#fbbf24', textTransform: 'uppercase', letterSpacing: '0.08em' }}>当前交易框架</div>
+                          <div style={{ marginTop: 8, fontSize: 14, lineHeight: 1.7, color: '#e5e7eb' }}>
+                            {(selectedStrategyPreset?.config.symbol || strategy.symbol)} / {(selectedStrategyPreset?.config.timeframe || strategy.timeframe)} / {(selectedStrategyPreset?.config.leverage || strategy.leverage)}x
+                          </div>
+                        </div>
+                      </div>
+                    </div>
                   </div>
-                  <div style={darkPanelStyle}>
-                    <SectionHeader title="回测摘要" hint="看收益、交易数与核心表现。" />
-                    <BacktestSummaryCard backtest={backtest} />
-                  </div>
+                </div>
+
+                <div style={darkPanelStyle}>
+                  <SectionHeader title="回测摘要" hint="看收益、交易数与核心表现。" />
+                  <BacktestSummaryCard backtest={backtest} />
                 </div>
 
                 <div style={twoColBalancedStyle}>
@@ -390,10 +486,11 @@ export default function HomePage() {
                     <SectionHeader title="风险回顾" hint="回测风险与关键比率。" />
                     <BacktestRiskCard backtest={backtest} />
                   </div>
-                  <div style={darkPanelStyle}>
-                    <SectionHeader title="交易明细" hint="回测成交明细与策略行为。" />
-                    <BacktestTradesCard backtest={backtest} />
-                  </div>
+                </div>
+
+                <div style={darkPanelStyle}>
+                  <SectionHeader title="交易明细" hint="回测成交明细与策略行为。" />
+                  <BacktestTradesCard backtest={backtest} />
                 </div>
               </div>
             )}
@@ -437,13 +534,14 @@ export default function HomePage() {
                       setRobotState({ running: false, baselinePositionIds: [] })
                       return
                     }
-                    const baselinePositionIds = (dashboard?.positions ?? []).map((item) => item.position_id)
+                    const baselinePositionIds = effectivePositions.map((item) => item.position_id)
                     setRobotState({ running: true, symbol: state.symbol, baselinePositionIds })
                   }}
                   robotRunning={robotState.running}
+                  robotEnabled={Boolean(dashboard.runner?.enabled)}
                   onStartRobot={handleStartRobot}
                   onPauseRobot={handlePauseRobot}
-                  positions={dashboard.positions.map((item) => ({
+                  positions={effectivePositions.map((item) => ({
                     position_id: item.position_id,
                     symbol: item.symbol as 'BTC_USDT' | 'ETH_USDT',
                     side: item.side,
@@ -490,4 +588,205 @@ export default function HomePage() {
       </div>
     </main>
   )
+}
+
+
+export default function HomePage() {
+  const [session, setSession] = useState<SessionResponse | null>(null)
+  const [sessionLoading, setSessionLoading] = useState(true)
+  const [authError, setAuthError] = useState<string | null>(null)
+  const [formState, setFormState] = useState({ username: '', password: '' })
+  const [submitting, setSubmitting] = useState(false)
+
+  useEffect(() => {
+    async function restoreSession() {
+      try {
+        const currentSession = await getSession()
+        setSession(currentSession.authenticated ? currentSession : null)
+      } catch (error) {
+        setAuthError(error instanceof Error ? error.message : '会话检查失败')
+        setSession(null)
+      } finally {
+        setSessionLoading(false)
+      }
+    }
+
+    void restoreSession()
+  }, [])
+
+  async function handleLoginSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    setSubmitting(true)
+    setAuthError(null)
+    try {
+      const nextSession = await login(formState.username.trim(), formState.password)
+      setSession(nextSession)
+      setFormState((prev) => ({ ...prev, password: '' }))
+    } catch (error) {
+      setAuthError(error instanceof Error ? error.message : '登录失败')
+      setSession(null)
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  async function handleLogout() {
+    try {
+      await logout()
+    } catch (error) {
+      console.warn('logout failed:', error)
+    } finally {
+      setSession(null)
+      setAuthError(null)
+      setFormState((prev) => ({ ...prev, password: '' }))
+    }
+  }
+
+  if (sessionLoading) {
+    return <main style={plainStateStyle}>正在检查登录状态...</main>
+  }
+
+  if (!session?.authenticated) {
+    return (
+      <main
+        style={{
+          minHeight: '100vh',
+          display: 'grid',
+          gridTemplateColumns: 'minmax(320px, 520px) minmax(280px, 460px)',
+          justifyContent: 'center',
+          alignItems: 'center',
+          gap: 36,
+          background: `
+            radial-gradient(circle at top left, rgba(34,211,238,0.16) 0%, rgba(2,6,23,0) 28%),
+            radial-gradient(circle at bottom right, rgba(59,130,246,0.18) 0%, rgba(2,6,23,0) 26%),
+            linear-gradient(180deg, rgba(15,23,42,1) 0%, rgba(2,6,23,1) 100%)
+          `,
+          padding: 28,
+        }}
+      >
+        <div style={{ display: 'grid', gap: 18, color: '#e2e8f0' }}>
+          <div style={{ display: 'inline-flex', width: 'fit-content', alignItems: 'center', gap: 10, padding: '10px 14px', borderRadius: 999, background: 'rgba(14,165,233,0.12)', border: '1px solid rgba(56,189,248,0.18)', color: '#bae6fd', fontSize: 12, fontWeight: 800, letterSpacing: '0.08em', textTransform: 'uppercase' }}>
+            Quant Gate Terminal
+          </div>
+          <div>
+            <h1 style={{ margin: 0, fontSize: 52, lineHeight: 1.02, color: '#f8fafc', letterSpacing: '-0.05em' }}>专业量化控制台</h1>
+            <p style={{ margin: '16px 0 0', color: '#94a3b8', lineHeight: 1.8, fontSize: 15, maxWidth: 560 }}>
+              登录后进入统一工作台，集中处理策略参数、回测、Runner、实盘账户联动与持仓复盘。
+            </p>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 12 }}>
+            {[
+              ['会话鉴权', 'HttpOnly Cookie'],
+              ['回测面板', '自定义日期区间'],
+              ['交易工作区', '策略 / Runner / 风控联动'],
+              ['实盘联动', '账户与持仓同步观察'],
+            ].map(([label, value]) => (
+              <div key={label} style={{ padding: '16px 16px', borderRadius: 22, background: 'rgba(15,23,42,0.5)', border: '1px solid rgba(71,85,105,0.34)', boxShadow: '0 20px 40px rgba(2,8,23,0.18)' }}>
+                <div style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.08em', color: '#94a3b8' }}>{label}</div>
+                <div style={{ marginTop: 8, fontSize: 18, fontWeight: 800, color: '#f8fafc' }}>{value}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+        <form
+          onSubmit={handleLoginSubmit}
+          style={{
+            width: '100%',
+            maxWidth: 460,
+            background: 'linear-gradient(180deg, rgba(15,23,42,0.9) 0%, rgba(15,23,42,0.82) 100%)',
+            border: '1px solid rgba(71,85,105,0.56)',
+            borderRadius: 28,
+            padding: 30,
+            boxShadow: '0 28px 80px rgba(2,6,23,0.45), inset 0 1px 0 rgba(148,163,184,0.06)',
+            display: 'grid',
+            gap: 18,
+            color: '#e2e8f0',
+            backdropFilter: 'blur(18px)',
+          }}
+        >
+          <div>
+            <div style={{ fontSize: 12, letterSpacing: '0.16em', textTransform: 'uppercase', color: '#7dd3fc', marginBottom: 8 }}>Secure Access</div>
+            <h1 style={{ margin: 0, fontSize: 32, color: '#f8fafc', letterSpacing: '-0.03em' }}>管理员登录</h1>
+            <p style={{ margin: '10px 0 0', color: '#94a3b8', lineHeight: 1.6 }}>
+              前端现在通过后端会话访问 API，不再在浏览器里暴露公开 API Key。
+            </p>
+          </div>
+
+          <label style={{ display: 'grid', gap: 8 }}>
+            <span style={{ fontSize: 14, color: '#cbd5e1' }}>用户名</span>
+            <input
+              value={formState.username}
+              onChange={(event) => setFormState((prev) => ({ ...prev, username: event.target.value }))}
+              placeholder="请输入管理员用户名"
+              autoComplete="username"
+              style={{
+                borderRadius: 16,
+                border: '1px solid rgba(71,85,105,0.72)',
+                background: 'rgba(2,6,23,0.42)',
+                color: '#f8fafc',
+                padding: '14px 15px',
+                outline: 'none',
+                boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.02)',
+              }}
+            />
+          </label>
+
+          <label style={{ display: 'grid', gap: 8 }}>
+            <span style={{ fontSize: 14, color: '#cbd5e1' }}>密码</span>
+            <input
+              type="password"
+              value={formState.password}
+              onChange={(event) => setFormState((prev) => ({ ...prev, password: event.target.value }))}
+              placeholder="请输入管理员密码"
+              autoComplete="current-password"
+              style={{
+                borderRadius: 16,
+                border: '1px solid rgba(71,85,105,0.72)',
+                background: 'rgba(2,6,23,0.42)',
+                color: '#f8fafc',
+                padding: '14px 15px',
+                outline: 'none',
+                boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.02)',
+              }}
+            />
+          </label>
+
+          {authError ? (
+            <div
+              style={{
+                borderRadius: 14,
+                border: '1px solid rgba(248,113,113,0.3)',
+                background: 'rgba(127,29,29,0.22)',
+                color: '#fecaca',
+                padding: '12px 14px',
+                fontSize: 14,
+              }}
+            >
+              {authError}
+            </div>
+          ) : null}
+
+          <button
+            type="submit"
+            disabled={submitting || !formState.username.trim() || !formState.password}
+            style={{
+              border: 'none',
+              borderRadius: 16,
+              background: submitting ? 'rgba(14,165,233,0.45)' : 'linear-gradient(135deg, #22d3ee 0%, #2563eb 55%, #4f46e5 100%)',
+              color: '#eff6ff',
+              padding: '14px 16px',
+              fontSize: 15,
+              fontWeight: 700,
+              cursor: submitting ? 'not-allowed' : 'pointer',
+              boxShadow: submitting ? 'none' : '0 18px 42px rgba(37,99,235,0.34)',
+            }}
+          >
+            {submitting ? '登录中...' : '登录进入控制台'}
+          </button>
+        </form>
+      </main>
+    )
+  }
+
+  return <DashboardPageInner session={session} onLogout={handleLogout} />
 }

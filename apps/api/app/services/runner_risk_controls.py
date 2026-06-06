@@ -48,6 +48,108 @@ def _is_trade_entry(entry: dict[str, Any]) -> bool:
     return action in ("close", "open", "open_long", "open_short")
 
 
+def _position_value(position: Any, key: str, default: float = 0.0) -> float:
+    if isinstance(position, dict):
+        value = position.get(key, default)
+    else:
+        value = getattr(position, key, default)
+    try:
+        return float(value or default)
+    except (TypeError, ValueError):
+        return default
+
+
+def _position_symbol(position: Any) -> str:
+    if isinstance(position, dict):
+        return str(position.get("symbol") or "")
+    return str(getattr(position, "symbol", "") or "")
+
+
+def _position_notional(position: Any) -> float:
+    qty = _position_value(position, "qty", _position_value(position, "size", 0.0))
+    price = _position_value(position, "mark_price", _position_value(position, "entry_price", 0.0))
+    multiplier = _position_value(position, "quanto_multiplier", 1.0)
+    return abs(qty * price * multiplier)
+
+
+def _broker_equity(broker: Any) -> float:
+    initial = broker.get("initial_balance", 1000) if isinstance(broker, dict) else getattr(broker, "initial_balance", 1000)
+    equity = broker.get("equity", initial) if isinstance(broker, dict) else getattr(broker, "equity", initial)
+    try:
+        equity = float(equity)
+    except (TypeError, ValueError):
+        equity = 0.0
+    if equity <= 0:
+        try:
+            equity = float(initial)
+        except (TypeError, ValueError):
+            equity = 1000.0
+    return max(equity, 1.0)
+
+
+def apply_entry_risk_limits(
+    *,
+    broker: Any,
+    symbol: str,
+    leverage: int,
+    requested_margin: float,
+    entry_price: float,
+) -> dict[str, Any]:
+    """?????????????????????????"""
+    _ = entry_price  # ???????????????????????????
+    equity = _broker_equity(broker)
+    positions = broker.get("positions", []) if isinstance(broker, dict) else getattr(broker, "positions", [])
+
+    max_single_margin_ratio = float(os.environ.get("MAX_SINGLE_MARGIN_RATIO", SETTINGS.max_single_margin_ratio))
+    max_total_exposure_ratio = float(os.environ.get("MAX_TOTAL_EXPOSURE_RATIO", SETTINGS.max_total_exposure_ratio))
+    max_open_positions = int(os.environ.get("MAX_OPEN_POSITIONS", SETTINGS.max_open_positions))
+
+    open_symbols = {_position_symbol(pos) for pos in positions if _position_notional(pos) > 0}
+    if symbol not in open_symbols and len(open_symbols) >= max_open_positions:
+        return {
+            "allowed": False,
+            "reason": "max_open_positions_reached",
+            "adjusted_margin": 0.0,
+            "max_open_positions": max_open_positions,
+            "open_positions": len(open_symbols),
+        }
+
+    single_margin_cap = equity * max_single_margin_ratio
+    capped_margin = min(float(requested_margin), single_margin_cap)
+
+    total_notional = sum(_position_notional(pos) for pos in positions)
+    total_notional_cap = equity * max_total_exposure_ratio
+    remaining_notional_capacity = max(total_notional_cap - total_notional, 0.0)
+    exposure_margin_cap = remaining_notional_capacity / max(int(leverage), 1)
+    adjusted_margin = min(capped_margin, exposure_margin_cap)
+
+    if adjusted_margin <= 0:
+        return {
+            "allowed": False,
+            "reason": "max_total_exposure_reached",
+            "adjusted_margin": 0.0,
+            "equity": round(equity, 6),
+            "total_notional": round(total_notional, 6),
+            "total_notional_cap": round(total_notional_cap, 6),
+            "remaining_notional_capacity": round(remaining_notional_capacity, 6),
+        }
+
+    return {
+        "allowed": True,
+        "reason": None,
+        "adjusted_margin": round(adjusted_margin, 10),
+        "requested_margin": round(float(requested_margin), 10),
+        "single_margin_cap": round(single_margin_cap, 10),
+        "total_notional": round(total_notional, 6),
+        "total_notional_cap": round(total_notional_cap, 6),
+        "remaining_notional_capacity": round(remaining_notional_capacity, 6),
+        "max_open_positions": max_open_positions,
+        "open_positions": len(open_symbols),
+        "max_single_margin_ratio": max_single_margin_ratio,
+        "max_total_exposure_ratio": max_total_exposure_ratio,
+    }
+
+
 def evaluate_runner_guards(trade_mode: str = "paper") -> dict[str, Any]:
     broker = LIVE_BROKER if trade_mode == "live" else PAPER_BROKER
     logs = load_logs(limit=500)
@@ -58,6 +160,7 @@ def evaluate_runner_guards(trade_mode: str = "paper") -> dict[str, Any]:
     max_dd = float(os.environ.get("MAX_DRAWDOWN_HALT_RATIO", SETTINGS.max_drawdown_halt_ratio))
     max_per_hour = int(os.environ.get("MAX_TRADES_PER_HOUR", SETTINGS.max_trades_per_hour))
     max_per_day = int(os.environ.get("MAX_TRADES_PER_DAY", SETTINGS.max_trades_per_day))
+    max_open_positions = int(os.environ.get("MAX_OPEN_POSITIONS", SETTINGS.max_open_positions))
 
     # 连续亏损
     consec = 0
@@ -87,6 +190,28 @@ def evaluate_runner_guards(trade_mode: str = "paper") -> dict[str, Any]:
         if pnl is not None:
             daily_pnl += pnl
 
+    # 实盘优先补充/校验本地结构化成交记录；这些记录来自 Gate 平仓回报，
+    # 比 Runner 日志更接近真实账户结果。
+    if trade_mode == "live":
+        try:
+            from app.services.db import get_conn, init_db
+            init_db()
+            with get_conn() as conn:
+                rows = conn.execute(
+                    """
+                    SELECT realized_pnl FROM paper_positions
+                    WHERE trade_mode = 'live'
+                      AND status = 'closed'
+                      AND realized_pnl IS NOT NULL
+                      AND DATE(closed_at) = DATE('now')
+                    """
+                ).fetchall()
+            live_daily_pnl = sum(float(row["realized_pnl"] or 0) for row in rows)
+            if rows:
+                daily_pnl = live_daily_pnl
+        except Exception as exc:
+            logger.warning("live daily pnl sync from structured history failed: %s", exc)
+
     initial = broker.get("initial_balance", 1000) if isinstance(broker, dict) else getattr(broker, "initial_balance", 1000)
     equity = broker.get("equity", initial) if isinstance(broker, dict) else getattr(broker, "equity", initial)
     if initial <= 0:
@@ -94,14 +219,11 @@ def evaluate_runner_guards(trade_mode: str = "paper") -> dict[str, Any]:
 
     daily_loss_ratio = abs(daily_pnl) / initial if daily_pnl < 0 else 0.0
 
-    # 总敞口
+    # ???
     positions = broker.get("positions", []) if isinstance(broker, dict) else getattr(broker, "positions", [])
-    total_notional = 0.0
-    for p in positions:
-        size = p.get("size", 0) if isinstance(p, dict) else getattr(p, "size", 0)
-        price = p.get("entry_price", 0) if isinstance(p, dict) else getattr(p, "entry_price", 0)
-        total_notional += abs(size * price)
+    total_notional = sum(_position_notional(pos) for pos in positions)
     exposure_ratio = total_notional / initial if initial > 0 else 0.0
+    open_position_count = len({_position_symbol(pos) for pos in positions if _position_notional(pos) > 0})
 
     # 回撤
     peak = broker.get("peak_equity", initial) if isinstance(broker, dict) else getattr(broker, "peak_equity", initial)
@@ -154,6 +276,8 @@ def evaluate_runner_guards(trade_mode: str = "paper") -> dict[str, Any]:
         "daily_loss_ratio": round(daily_loss_ratio, 6),
         "total_notional": round(total_notional, 2),
         "exposure_ratio": round(exposure_ratio, 6),
+        "open_position_count": open_position_count,
+        "max_open_positions": max_open_positions,
         "current_drawdown_pct": round(drawdown_pct, 6),
         "trades_per_hour": trades_hour,
         "trades_per_day": trades_day,

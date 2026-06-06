@@ -35,6 +35,7 @@ import type {
 } from '../lib/api'
 import type {
   BacktestResult,
+  BacktestRunSettings,
   DashboardData,
   EquityPoint,
   HistoryFilters,
@@ -440,7 +441,7 @@ export function useDashboardPageData() {
     })
   }
 
-  async function handleRunBacktest(config: StrategyConfig, backtestDays = 7) {
+  async function handleRunBacktest(config: StrategyConfig, options: BacktestRunSettings = { backtest_days: 7 }) {
     const liveTicker = marketTickers[config.symbol]
     const entryPrice = liveTicker?.last_price ?? (config.symbol === 'BTC_USDT' ? 64000 : 3200)
     const stopLossPrice = entryPrice * (1 - config.stop_loss_pct)
@@ -452,13 +453,23 @@ export function useDashboardPageData() {
       allocated_margin: Number(dashboard?.defaults?.default_allocated_margin || 1000),
       entry_price: entryPrice,
       stop_loss_price: stopLossPrice,
-      backtest_days: backtestDays,
+      backtest_days: options.backtest_days ?? 7,
     }
+
+    if (options.start_date && options.end_date) {
+      payload.start_date = options.start_date
+      payload.end_date = options.end_date
+    }
+
     const result = await runBacktest(payload)
     setBacktest(result)
   }
 
-  async function handleRunStrategyOnce(symbols?: Array<'BTC_USDT' | 'ETH_USDT'>, overrideLeverage?: number, overrideTradeMode?: 'paper' | 'live') {
+  function clearBacktest() {
+    setBacktest(null)
+  }
+
+  async function handleRunStrategyOnce(symbols?: Array<'BTC_USDT' | 'ETH_USDT'>, overrideLeverage?: number, overrideTradeMode?: 'paper' | 'live', overrideDirectionMode?: 'auto' | 'long_only' | 'short_only') {
     const activeStrategy = selectedStrategyPreset?.config || strategy
     if (!activeStrategy) return
     const activeSymbols = symbols && symbols.length > 0 ? symbols : (activeStrategy.symbols && activeStrategy.symbols.length > 0 ? activeStrategy.symbols : [activeStrategy.symbol])
@@ -469,6 +480,7 @@ export function useDashboardPageData() {
       strategy_type: activeStrategy.strategy_type,
       data_source: 'gate',
       trade_mode: overrideTradeMode,
+      direction_mode: overrideDirectionMode ?? 'auto',
       leverage: overrideLeverage ?? activeStrategy.leverage,
       allocated_margin: Number(dashboard?.defaults?.default_allocated_margin || 1000),
       use_boll: activeStrategy.use_boll,
@@ -492,6 +504,8 @@ export function useDashboardPageData() {
       kdj_overbought: activeStrategy.kdj_overbought,
       min_signal_score: activeStrategy.min_signal_score,
       churn_guard_enabled: activeStrategy.churn_guard_enabled,
+      classic_trend_filter_enabled: activeStrategy.classic_trend_filter_enabled,
+      classic_cooldown_bars: activeStrategy.classic_cooldown_bars,
       turtle_entry_period: activeStrategy.turtle_entry_period,
       turtle_exit_period: activeStrategy.turtle_exit_period,
       turtle_atr_period: activeStrategy.turtle_atr_period,
@@ -513,6 +527,7 @@ export function useDashboardPageData() {
       reloadRunnerLogs(),
       reloadHistory(),
     ])
+    return result
   }
 
   async function handleToggleRunner(enabled: boolean, symbols?: Array<'BTC_USDT' | 'ETH_USDT'>, tradeMode?: 'paper' | 'live') {
@@ -608,6 +623,7 @@ export function useDashboardPageData() {
     handleAddStrategySlot,
     handleDeleteStrategySlot,
     handleRunBacktest,
+    clearBacktest,
     handleRunStrategyOnce,
     handleToggleRunner,
     handleResumeRunner,

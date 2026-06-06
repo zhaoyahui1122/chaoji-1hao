@@ -2,21 +2,54 @@ from __future__ import annotations
 
 import importlib
 import json
+import os
 import sys
+from contextlib import contextmanager
 from pathlib import Path
 
+import pandas as pd
 from fastapi.testclient import TestClient
 
+from app.services.runner_log_store import append_log, load_logs
 from app.services.db import get_conn, init_db, save_kv
 from app.services.paper_store import load_structured_paper_state
 from app.services.runner_state_store import DEFAULT_RUNNER_STATE, load_runner_state, save_runner_state
-from app.services.strategy_runner import set_runner_enabled
+from app.services.strategy_runner import _run_single_symbol_cycle, set_runner_enabled
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 STATE_DIR = REPO_ROOT / "state"
 JSON_BROKER_PATH = STATE_DIR / "paper_broker_state.json"
 JSON_RUNNER_PATH = STATE_DIR / "runner_state.json"
+
+
+@contextmanager
+def auth_env(
+    username: str = "admin",
+    password_hash: str = "fcf730b6d95236ecd3c9fc2d92d7b6b2bb061514961aec041d6c7a7192f592e4",
+    session_secret: str = "test-session-secret",
+):
+    old_values = {
+        "ADMIN_USERNAME": os.environ.get("ADMIN_USERNAME"),
+        "ADMIN_PASSWORD_HASH": os.environ.get("ADMIN_PASSWORD_HASH"),
+        "SESSION_SECRET": os.environ.get("SESSION_SECRET"),
+    }
+    os.environ["ADMIN_USERNAME"] = username
+    os.environ["ADMIN_PASSWORD_HASH"] = password_hash
+    os.environ["SESSION_SECRET"] = session_secret
+    try:
+        yield
+    finally:
+        for key, value in old_values.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+
+def login_test_client(client: TestClient) -> None:
+    login_response = client.post("/auth/login", json={"username": "admin", "password": "secret123"})
+    assert login_response.status_code == 200
 
 
 def _reset_tables() -> None:
@@ -171,9 +204,11 @@ def test_broker_persists_open_and_close_to_sqlite_only():
         assert open_meta["stop_loss_price"] == 95.0
         assert open_meta["take_profit_price"] == 110.01100000000001
 
-    _, _, main_module = _reload_runtime_modules()
-    client = TestClient(main_module.app)
-    history_open = client.get(f"/history/positions?symbol=BTC_USDT&status=open").json()
+    with auth_env():
+        _, _, main_module = _reload_runtime_modules()
+        client = TestClient(main_module.app)
+        login_test_client(client)
+        history_open = client.get(f"/history/positions?symbol=BTC_USDT&status=open").json()
     open_dashboard_broker = _reload_broker_state()
     dashboard_snapshot = open_dashboard_broker.snapshot()
 
@@ -384,14 +419,16 @@ def test_non_persisted_live_mark_refresh_updates_dashboard_and_history(monkeypat
         )
         conn.commit()
 
-    _, _, main_module = _reload_runtime_modules()
-    broker = _reload_broker_state()
-    client = TestClient(main_module.app)
+    with auth_env():
+        _, _, main_module = _reload_runtime_modules()
+        broker = _reload_broker_state()
+        client = TestClient(main_module.app)
+        login_test_client(client)
 
-    dashboard = client.get("/dashboard").json()
-    positions_history = client.get("/history/positions").json()
-    stats = client.get("/history/stats").json()
-    runner = client.get("/runner/status").json()
+        dashboard = client.get("/dashboard").json()
+        positions_history = client.get("/history/positions").json()
+        stats = client.get("/history/stats").json()
+        runner = client.get("/runner/status").json()
 
     assert [item["position_id"] for item in dashboard["positions"]] == ["dashboard-open"]
     assert {item["position_id"] for item in dashboard["orders"]} == {"dashboard-open"}
@@ -516,3 +553,216 @@ def test_runner_state_reads_kv_before_json_fallback():
     written_json = json.loads(JSON_RUNNER_PATH.read_text(encoding="utf-8"))
     assert written_json["selected_symbols"] == ["BTC_USDT", "ETH_USDT"]
     assert written_json["loop_count"] == 9
+
+
+def test_runner_reset_paper_clears_runner_runtime_state_and_logs():
+    _reset_tables()
+    save_runner_state({
+        **DEFAULT_RUNNER_STATE,
+        "enabled": True,
+        "is_running": True,
+        "loop_count": 7,
+        "last_run_at": "2026-06-04T15:00:00",
+        "last_result": {"ok": True, "action": "open"},
+        "last_error": "old error",
+        "last_config": {"symbol": "BTC_USDT"},
+        "selected_symbols": ["BTC_USDT", "ETH_USDT"],
+        "trade_mode": "paper",
+    })
+    append_log({"ts": "2026-06-04T15:00:00", "result": {"action": "open"}})
+
+    with auth_env():
+        _, _, main_module = _reload_runtime_modules()
+        client = TestClient(main_module.app)
+        login_response = client.post("/auth/login", json={"username": "admin", "password": "secret123"})
+        assert login_response.status_code == 200
+
+        response = client.post("/runner/reset-paper")
+        assert response.status_code == 200
+
+    state = load_runner_state()
+    assert state["enabled"] is False
+    assert state["is_running"] is False
+    assert state["loop_count"] == 0
+    assert state["last_run_at"] is None
+    assert state["last_result"] is None
+    assert state["last_error"] is None
+    assert state["last_config"] is None
+    assert state["selected_symbols"] is None
+    assert state["trade_mode"] == "paper"
+    assert load_logs() == []
+
+
+def test_paper_reset_custom_also_clears_runner_runtime_state_and_logs():
+    _reset_tables()
+    save_runner_state({
+        **DEFAULT_RUNNER_STATE,
+        "enabled": True,
+        "is_running": False,
+        "loop_count": 3,
+        "last_run_at": "2026-06-04T16:00:00",
+        "last_result": {"ok": False, "action": "halted"},
+        "last_config": {"symbol": "ETH_USDT"},
+        "selected_symbols": ["ETH_USDT"],
+        "trade_mode": "paper",
+    })
+    append_log({"ts": "2026-06-04T16:00:00", "result": {"action": "halted"}})
+
+    with auth_env():
+        _, _, main_module = _reload_runtime_modules()
+        client = TestClient(main_module.app)
+        login_response = client.post("/auth/login", json={"username": "admin", "password": "secret123"})
+        assert login_response.status_code == 200
+
+        response = client.post("/paper/reset-custom", json={"initial_balance": 1000})
+        assert response.status_code == 200
+
+    state = load_runner_state()
+    assert state["enabled"] is False
+    assert state["is_running"] is False
+    assert state["loop_count"] == 0
+    assert state["last_run_at"] is None
+    assert state["last_result"] is None
+    assert state["last_config"] is None
+    assert state["selected_symbols"] is None
+    assert load_logs() == []
+
+
+def test_runner_run_once_accepts_50x_leverage():
+    _reset_tables()
+    with auth_env():
+        _, _, main_module = _reload_runtime_modules()
+        client = TestClient(main_module.app)
+        login_response = client.post("/auth/login", json={"username": "admin", "password": "secret123"})
+        assert login_response.status_code == 200
+
+        response = client.post(
+            "/runner/run-once",
+            json={
+                "symbol": "BTC_USDT",
+                "symbols": ["BTC_USDT"],
+                "timeframe": "15m",
+                "strategy_type": "classic",
+                "data_source": "gate",
+                "trade_mode": "paper",
+                "leverage": 50,
+                "allocated_margin": 100,
+                "use_boll": True,
+                "boll_period": 24,
+                "boll_std": 2.0,
+                "use_rsi": True,
+                "rsi_period": 14,
+                "rsi_oversold": 30,
+                "rsi_overbought": 70,
+                "use_ma": True,
+                "ma_short": 10,
+                "ma_long": 30,
+                "min_signal_score": 4,
+                "churn_guard_enabled": True,
+                "turtle_entry_period": 20,
+                "turtle_exit_period": 10,
+                "turtle_atr_period": 14,
+                "turtle_atr_filter": 0.0,
+                "stop_loss_pct": 0.02,
+                "take_profit_pct": 0.05,
+                "risk_per_trade_pct": 0.01,
+                "fee_rate": 0.00015,
+                "slippage_rate": 0.0001,
+            },
+        )
+
+    assert response.status_code != 422
+
+
+def test_run_single_symbol_cycle_with_existing_position_does_not_raise_trade_mode_name_error():
+    _reset_tables()
+    broker = _reload_broker_state()
+    open_result = broker.place_order(
+        symbol="BTC_USDT",
+        side="long",
+        price=100.0,
+        leverage=10,
+        allocated_margin=100,
+        stop_loss_price=98.0,
+        source="test",
+        meta={
+            "take_profit_price": 105.0,
+            "stop_loss_price": 98.0,
+        },
+        qty=5.0,
+    )
+    assert open_result["ok"] is True
+
+    df = pd.DataFrame(
+        [
+            {"open": 100.0, "high": 101.0, "low": 99.0, "close": 100.0},
+            {"open": 100.0, "high": 101.0, "low": 99.0, "close": 100.0},
+        ]
+    )
+
+    result = _run_single_symbol_cycle(
+        symbol="BTC_USDT",
+        config={
+            "symbol": "BTC_USDT",
+            "trade_mode": "paper",
+            "strategy_type": "classic",
+            "stop_loss_pct": 0.02,
+            "take_profit_pct": 0.05,
+        },
+        guard={"allowed": True},
+        timeframe="15m",
+        leverage=50,
+        allocated_margin=100,
+        risk_per_trade_pct=0.01,
+        stop_loss_pct=0.02,
+        take_profit_pct=0.05,
+        data_source="gate",
+        fee_rate=0.00015,
+        slippage_rate=0.0001,
+        strategy_type="classic",
+        broker=broker,
+        pre_fetched_data={"df": df, "market_meta": {"actual_source": "gate"}},
+    )
+
+    assert result["ok"] is True
+    assert result["action"] == "mark"
+
+
+def test_scheduler_runtime_config_prefers_runner_last_config():
+    _reset_tables()
+    save_kv(
+        "strategy",
+        "config",
+        {
+            "symbol": "BTC_USDT",
+            "timeframe": "15m",
+            "strategy_type": "classic",
+            "leverage": 5,
+        },
+    )
+    save_kv(
+        "runner",
+        "state",
+        {
+            **DEFAULT_RUNNER_STATE,
+            "enabled": True,
+            "trade_mode": "paper",
+            "selected_symbols": ["ETH_USDT"],
+            "last_config": {
+                "symbol": "BTC_USDT",
+                "symbols": ["BTC_USDT", "ETH_USDT"],
+                "timeframe": "15m",
+                "strategy_type": "classic",
+                "leverage": 50,
+            },
+        },
+    )
+
+    scheduler_module = importlib.import_module("app.services.scheduler")
+    config = scheduler_module._build_runtime_config()
+
+    assert config["leverage"] == 50
+    assert config["symbols"] == ["ETH_USDT"]
+    assert config["symbol"] == "ETH_USDT"
+    assert config["trade_mode"] == "paper"
+    assert config["data_source"] == "gate"

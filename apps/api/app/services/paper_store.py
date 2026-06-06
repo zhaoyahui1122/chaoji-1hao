@@ -582,3 +582,34 @@ def get_history_stats(trade_mode: str | None = None) -> dict[str, Any]:
         "total_slippage_cost": total_slippage_cost,
         "total_realized_pnl": total_net_realized_pnl,
     }
+
+
+def get_drawdown_summary(trade_mode: str = "paper") -> dict[str, float]:
+    """基于权益快照重算指定交易模式的峰值/当前回撤/最大回撤。"""
+    equity_curve = get_equity_curve(limit=5000, trade_mode=trade_mode)
+    if not equity_curve:
+        return {
+            "peak_equity": 0.0,
+            "current_drawdown_pct": 0.0,
+            "max_drawdown_pct": 0.0,
+        }
+
+    peak_equity = 0.0
+    latest_equity = float(equity_curve[-1].get("equity") or 0.0)
+    max_drawdown = 0.0
+
+    for point in equity_curve:
+        equity = float(point.get("equity") or 0.0)
+        if equity > peak_equity:
+            peak_equity = equity
+        if peak_equity > 0:
+            drawdown = (peak_equity - equity) / peak_equity
+            if drawdown > max_drawdown:
+                max_drawdown = drawdown
+
+    current_drawdown = (peak_equity - latest_equity) / peak_equity if peak_equity > 0 else 0.0
+    return {
+        "peak_equity": round(peak_equity, 2),
+        "current_drawdown_pct": round(current_drawdown, 6),
+        "max_drawdown_pct": round(max_drawdown, 6),
+    }

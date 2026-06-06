@@ -6,7 +6,12 @@ from typing import Any
 import pandas as pd
 
 from app.services.risk import apply_slippage, calc_fee, build_risk_sized_order
-from app.strategy.boll_rsi_ma import compute_indicators as classic_compute_indicators, generate_signal as classic_generate_signal
+from app.services.contract_metrics import estimate_liquidation_price
+from app.strategy.boll_rsi_ma import (
+    apply_entry_filters as classic_apply_entry_filters,
+    compute_indicators as classic_compute_indicators,
+    generate_signal as classic_generate_signal,
+)
 from app.strategy.turtle import prepare_signals as turtle_prepare_signals
 from app.strategy.ict import (
     _get_trend_bos,
@@ -106,15 +111,20 @@ class SimpleBacktester:
         equity_curve: list[dict[str, Any]] = []
         trades: list[BacktestTrade] = []
         position = None
+        cooldown_until = -1
 
         risk_per_trade_pct = float(config.get("risk_per_trade_pct", 0.01))
         stop_loss_pct = float(config.get("stop_loss_pct", 0.02))
         take_profit_pct = float(config.get("take_profit_pct", 0.04))
         fee_rate = float(config.get("fee_rate", 0.00015))
         slippage_rate = float(config.get("slippage_rate", 0.0001))
+        cooldown_bars = int(config.get("classic_cooldown_bars", 0) or 0)
+        trend_filter_enabled = bool(config.get("classic_trend_filter_enabled", False))
 
-        for _, row in data.iterrows():
+        for bar_idx, (_, row) in enumerate(data.iterrows()):
             price = float(row["close"])
+            candle_high = float(row.get("high", price))
+            candle_low = float(row.get("low", price))
             ts = str(row["timestamp"])
             signal = classic_generate_signal(
                 row,
@@ -129,6 +139,14 @@ class SimpleBacktester:
                 kdj_oversold=float(config.get("kdj_oversold", 20)),
                 min_signal_score=int(config.get("min_signal_score", 3)),
             )
+            signal = classic_apply_entry_filters(
+                signal,
+                row,
+                trend_filter_enabled=trend_filter_enabled,
+            )
+
+            if position is None and bar_idx <= cooldown_until:
+                signal = None
 
             if position is None and signal in ("long", "short"):
                 entry_price = self._apply_slippage(signal, price, slippage_rate, is_close=False)
@@ -136,7 +154,7 @@ class SimpleBacktester:
                     side=signal,
                     account_equity=balance,
                     entry_price=entry_price,
-                    leverage=1,
+                    leverage=int(config.get("leverage", 1)),
                     risk_per_trade_pct=risk_per_trade_pct,
                     stop_loss_pct=stop_loss_pct,
                     take_profit_pct=take_profit_pct,
@@ -155,27 +173,39 @@ class SimpleBacktester:
                         "qty": qty,
                         "stop_price": sizing["stop_loss_price"],
                         "take_profit_price": sizing["take_profit_price"],
+                        "liquidation_price": estimate_liquidation_price(signal, entry_price, int(config.get("leverage", 1))),
                     }
 
             elif position is not None:
                 exit_reason = None
+                trigger_price = price
                 if position["side"] == "long":
-                    if price <= position["stop_price"]:
+                    if candle_low <= position.get("liquidation_price", 0) and position.get("liquidation_price", 0) > 0:
+                        exit_reason = "liquidation"
+                        trigger_price = position["liquidation_price"]
+                    elif candle_low <= position["stop_price"]:
                         exit_reason = "stop_loss"
-                    elif price >= position["take_profit_price"]:
+                        trigger_price = position["stop_price"]
+                    elif candle_high >= position["take_profit_price"]:
                         exit_reason = "take_profit"
+                        trigger_price = position["take_profit_price"]
                     elif signal == "short":
                         exit_reason = "reverse_signal"
-                    exit_price = self._apply_slippage("long", price, slippage_rate, is_close=True)
+                    exit_price = self._apply_slippage("long", trigger_price, slippage_rate, is_close=True)
                     gross_pnl = (exit_price - position["entry_price"]) * position["qty"]
                 else:
-                    if price >= position["stop_price"]:
+                    if candle_high >= position.get("liquidation_price", 0) and position.get("liquidation_price", 0) > 0:
+                        exit_reason = "liquidation"
+                        trigger_price = position["liquidation_price"]
+                    elif candle_high >= position["stop_price"]:
                         exit_reason = "stop_loss"
-                    elif price <= position["take_profit_price"]:
+                        trigger_price = position["stop_price"]
+                    elif candle_low <= position["take_profit_price"]:
                         exit_reason = "take_profit"
+                        trigger_price = position["take_profit_price"]
                     elif signal == "long":
                         exit_reason = "reverse_signal"
-                    exit_price = self._apply_slippage("short", price, slippage_rate, is_close=True)
+                    exit_price = self._apply_slippage("short", trigger_price, slippage_rate, is_close=True)
                     gross_pnl = (position["entry_price"] - exit_price) * position["qty"]
 
                 if exit_reason:
@@ -206,6 +236,7 @@ class SimpleBacktester:
                         )
                     )
                     position = None
+                    cooldown_until = bar_idx + cooldown_bars
 
             unrealized = 0.0
             if position is not None:
@@ -250,7 +281,7 @@ class SimpleBacktester:
                     side=signal,
                     account_equity=balance,
                     entry_price=entry_price,
-                    leverage=1,
+                    leverage=int(config.get("leverage", 1)),
                     risk_per_trade_pct=risk_per_trade_pct,
                     stop_loss_pct=stop_loss_pct,
                     take_profit_pct=take_profit_pct,
@@ -269,6 +300,7 @@ class SimpleBacktester:
                         "qty": qty,
                         "stop_price": stop_loss_price,
                         "take_profit_price": take_profit_price,
+                        "liquidation_price": estimate_liquidation_price(signal, entry_price, int(config.get("leverage", 1))),
                     }
 
             # Exit signals
@@ -527,7 +559,7 @@ class SimpleBacktester:
                         side=signal_dir,
                         account_equity=balance,
                         entry_price=entry_price,
-                        leverage=1,
+                        leverage=int(config.get("leverage", 1)),
                         risk_per_trade_pct=risk_per_trade_pct,
                         stop_loss_pct=sl_distance / entry_price if entry_price > 0 else 0.02,
                         take_profit_pct=abs(take_profit - entry_price) / entry_price if entry_price > 0 else 0.04,

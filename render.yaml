@@ -10,7 +10,11 @@ services:
         value: "1"
       - key: CORS_ORIGINS
         sync: false  # 部署后手动填 Cloudflare Pages URL
-      - key: API_SECRET_KEY
+      - key: ADMIN_USERNAME
+        sync: false
+      - key: ADMIN_PASSWORD_HASH
+        sync: false
+      - key: SESSION_SECRET
         generateValue: true
       - key: DATABASE_URL
         sync: false  # 如需 PostgreSQL 填连接串，否则不填用 SQLite

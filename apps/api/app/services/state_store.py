@@ -7,7 +7,7 @@ from typing import Any
 
 from app.services.db import load_kv, save_kv
 
-_STATE_DIR = Path(os.environ.get("STATE_DIR", str(Path(__file__).resolve().parents[2] / "state")))
+_STATE_DIR = Path(os.environ.get("STATE_DIR", str(Path(__file__).resolve().parents[4] / "state")))
 _STATE_DIR.mkdir(parents=True, exist_ok=True)
 STATE_PATH = _STATE_DIR / "paper_broker_state.json"
 

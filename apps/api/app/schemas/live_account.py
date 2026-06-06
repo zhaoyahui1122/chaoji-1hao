@@ -35,3 +35,4 @@ class LiveAccountStatusResponse(BaseModel):
 class LiveAccountConnectRequest(BaseModel):
     api_key: str
     api_secret: str
+    operation_token: str | None = None

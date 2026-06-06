@@ -49,6 +49,11 @@ def _trim_ohlcv_window(df: pd.DataFrame, start_ts: int | None = None, end_ts: in
     return trimmed.reset_index(drop=True)
 
 
+def _format_timestamp_iso(value: int | float | str | pd.Timestamp) -> str:
+    normalized = _normalize_timestamp(value)
+    return datetime.fromtimestamp(normalized, tz=UTC).isoformat()
+
+
 def generate_mock_ohlcv(
     symbol: str,
     timeframe: str,
@@ -122,6 +127,8 @@ def get_ohlcv(
                 meta["actual_source"] = "gate"
                 meta["fallback_used"] = False
                 meta["candles"] = int(len(df))
+                meta["actual_window_start"] = _format_timestamp_iso(df.iloc[0]["timestamp"])
+                meta["actual_window_end"] = _format_timestamp_iso(df.iloc[-1]["timestamp"])
                 if len(df) < periods:
                     meta["warning"] = f"gate_returned_{len(df)}_candles_below_requested_{periods}"
                 return df, meta
@@ -143,4 +150,7 @@ def get_ohlcv(
     df = generate_mock_ohlcv(symbol, timeframe, periods=mock_periods, end_time=end_time)
     df = _trim_ohlcv_window(df, start_ts=start_ts, end_ts=end_ts)
     meta["candles"] = int(len(df))
+    if not df.empty:
+        meta["actual_window_start"] = _format_timestamp_iso(df.iloc[0]["timestamp"])
+        meta["actual_window_end"] = _format_timestamp_iso(df.iloc[-1]["timestamp"])
     return df, meta

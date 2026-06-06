@@ -1,3 +1,6 @@
+from app.services.contract_metrics import MAINTENANCE_MARGIN_RATIO
+
+
 def apply_slippage(side: str, price: float, slippage_rate: float, is_close: bool = False) -> float:
     """Apply slippage to a price. side='long'|'short', action determined by is_close."""
     rate = max(float(slippage_rate or 0.0), 0.0)
@@ -35,6 +38,26 @@ def calc_take_profit_price(entry_price: float, side: str, take_profit_pct: float
     if side == "long":
         return entry_price * (1 + take_profit_pct)
     return entry_price * (1 - take_profit_pct)
+
+
+def get_estimated_liquidation_buffer_pct(
+    leverage: int,
+    maintenance_margin_ratio: float = MAINTENANCE_MARGIN_RATIO,
+) -> float:
+    if leverage <= 0:
+        return 0.0
+    return max(0.0, 1 / leverage - maintenance_margin_ratio)
+
+
+def validate_stop_loss_against_liquidation(leverage: int, stop_loss_pct: float) -> dict:
+    liquidation_buffer_pct = get_estimated_liquidation_buffer_pct(leverage)
+    is_valid_stop_loss = stop_loss_pct > 0 and stop_loss_pct < liquidation_buffer_pct
+    return {
+        "ok": is_valid_stop_loss,
+        "leverage": leverage,
+        "stop_loss_pct": stop_loss_pct,
+        "liquidation_buffer_pct": liquidation_buffer_pct,
+    }
 
 
 def calc_position_qty_by_risk(account_equity: float, risk_per_trade_pct: float, entry_price: float, stop_loss_price: float) -> float:
@@ -79,6 +102,8 @@ def build_risk_sized_order(
     effective_allocated_margin = risk_based_allocated_margin
     if allocated_margin_cap is not None and allocated_margin_cap > 0:
         effective_allocated_margin = min(allocated_margin_cap, risk_based_allocated_margin) if risk_based_allocated_margin > 0 else allocated_margin_cap
+    if entry_price > 0 and leverage > 0 and effective_allocated_margin > 0:
+        qty = calc_position_qty_by_margin(entry_price, effective_allocated_margin, leverage)
     return {
         "side": side,
         "entry_price": entry_price,

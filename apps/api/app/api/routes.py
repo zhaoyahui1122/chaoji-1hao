@@ -1,5 +1,6 @@
 from fastapi import APIRouter
 
+from app.api.routes_auth import router as auth_router
 from app.api.routes_backtest import router as backtest_router
 from app.api.routes_dashboard import router as dashboard_router
 from app.api.routes_strategy import router as strategy_router
@@ -11,6 +12,7 @@ from app.api.routes_live_account import router as live_account_router
 from app.api.routes_export import router as export_router
 
 router = APIRouter()
+router.include_router(auth_router, prefix="/auth", tags=["auth"])
 router.include_router(dashboard_router, prefix="/dashboard", tags=["dashboard"])
 router.include_router(strategy_router, prefix="/strategy", tags=["strategy"])
 router.include_router(backtest_router, prefix="/backtest", tags=["backtest"])

@@ -6,6 +6,7 @@ from app.services.live_account_service import connect_live_account, refresh_live
 from app.services.live_account_session import get_live_account_session
 from app.services.gate_live_account import fetch_contract_detail
 from app.core.state import LIVE_BROKER
+from app.services.auth_service import AuthenticationError, require_operation_token
 
 router = APIRouter()
 
@@ -29,6 +30,10 @@ def get_live_account_status():
 
 @router.post("/connect")
 def connect_live_account_route(payload: LiveAccountConnectRequest):
+    try:
+        require_operation_token(getattr(payload, "operation_token", None), "live_connect")
+    except AuthenticationError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
     try:
         return _serialize_session(connect_live_account(payload.api_key, payload.api_secret))
     except ValueError as exc:
@@ -67,10 +72,15 @@ def get_contract_info(symbol: str):
 class LiveCloseRequest(BaseModel):
     symbol: str
     position_id: str | None = None
+    operation_token: str | None = None
 
 
 @router.post("/close")
 def close_live_position(payload: LiveCloseRequest):
+    try:
+        require_operation_token(payload.operation_token, "live_close_position")
+    except AuthenticationError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
     try:
         LIVE_BROKER.sync_positions()
         target = next((p for p in LIVE_BROKER.positions if p.symbol == payload.symbol.upper()), None)
@@ -89,7 +99,12 @@ def close_live_position(payload: LiveCloseRequest):
 
 
 @router.post("/close-all")
-def close_all_live_positions():
+def close_all_live_positions(payload: dict | None = None):
+    token = (payload or {}).get("operation_token") if isinstance(payload, dict) else None
+    try:
+        require_operation_token(token, "live_close_all")
+    except AuthenticationError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
     try:
         LIVE_BROKER.sync_positions()
         results = []
@@ -112,9 +127,10 @@ def close_all_live_positions():
             api_key, api_secret = LIVE_BROKER._creds()
             _gate_private_request(
                 "DELETE",
-                f"{GATE_FUTURES_PRICE_ORDERS_PATH}?status=open",
+                GATE_FUTURES_PRICE_ORDERS_PATH,
                 api_key=api_key,
                 api_secret=api_secret,
+                query_string="status=open",
             )
         except Exception:
             pass

@@ -3,6 +3,15 @@
 import { useEffect, useMemo, useState, useRef } from 'react'
 import type React from 'react'
 import { getContractInfo } from '../lib/api'
+import {
+  buildPresetSyncedTradeState,
+  canPauseRobot,
+  formatSelectedPresetRuntimeSummary,
+  getRunnerStartBlockReasonAfterProbe,
+  getTradeDirectionModeOptions,
+  type TradeDirectionMode,
+  validateStopLossAgainstLiquidation,
+} from './runner-ui-utils'
 
 const DEFAULT_ACCOUNT_EQUITY = 10000
 
@@ -28,7 +37,7 @@ type Props = {
   onMark: (payload: { symbol: 'BTC_USDT' | 'ETH_USDT'; mark_price: number; position_id?: string }) => Promise<void>
   onClose: (payload: { symbol: 'BTC_USDT' | 'ETH_USDT'; price: number; position_id?: string }) => Promise<void>
   onReset?: (initialBalance: number) => Promise<void>
-  onRunStrategyOnce?: (symbols?: Array<'BTC_USDT' | 'ETH_USDT'>, leverage?: number, tradeMode?: 'paper' | 'live') => Promise<void>
+  onRunStrategyOnce?: (symbols?: Array<'BTC_USDT' | 'ETH_USDT'>, leverage?: number, tradeMode?: 'paper' | 'live', directionMode?: TradeDirectionMode) => Promise<unknown>
   accountEquity?: number
   marketTickers?: Record<'BTC_USDT' | 'ETH_USDT', { last_price: number; mark_price: number } | null>
   positions?: Array<{ position_id?: string | null; symbol: 'BTC_USDT' | 'ETH_USDT'; side: 'long' | 'short'; entry_price: number; mark_price: number; qty: number; leverage: number; unrealized_pnl?: number }>
@@ -39,6 +48,7 @@ type Props = {
     name: string
     config: {
       symbol: 'BTC_USDT' | 'ETH_USDT'
+      symbols?: Array<'BTC_USDT' | 'ETH_USDT'> | null
       strategy_type?: 'classic' | 'turtle' | 'ict'
       leverage: number
       stop_loss_pct: number
@@ -57,6 +67,7 @@ type Props = {
   onRobotStateChange?: (state: { running: boolean; symbol?: 'BTC_USDT' | 'ETH_USDT' }) => void
   onStartRobot?: (symbols?: Array<'BTC_USDT' | 'ETH_USDT'>) => Promise<void>
   onPauseRobot?: () => Promise<void>
+  robotEnabled?: boolean
   tradeMode?: 'paper' | 'live'
   onTradeModeChange?: (mode: 'paper' | 'live') => void
   liveConnected?: boolean
@@ -64,11 +75,10 @@ type Props = {
   livePositions?: Array<{ symbol: string; side: 'long' | 'short'; leverage: number; size: number; entry_price: number; mark_price: number; unrealized_pnl: number }>
 }
 
-export default function PaperTradePanel({ onOpen, onMark, onClose, onReset, onRunStrategyOnce, accountEquity = DEFAULT_ACCOUNT_EQUITY, marketTickers, positions = [], selectedStrategySlotId, onSelectedStrategySlotChange, strategyPresets = [], onRobotRunningChange, robotRunning, onRobotStateChange, onStartRobot, onPauseRobot, tradeMode = 'paper', onTradeModeChange, liveConnected = false, liveEquity = 0, livePositions = [] }: Props) {
+export default function PaperTradePanel({ onOpen, onMark, onClose, onReset, onRunStrategyOnce, accountEquity = DEFAULT_ACCOUNT_EQUITY, marketTickers, positions = [], selectedStrategySlotId, onSelectedStrategySlotChange, strategyPresets = [], onRobotRunningChange, robotRunning, onRobotStateChange, onStartRobot, onPauseRobot, robotEnabled = false, tradeMode = 'paper', onTradeModeChange, liveConnected = false, liveEquity = 0, livePositions = [] }: Props) {
   const [symbol, setSymbol] = useState<'BTC_USDT' | 'ETH_USDT'>('BTC_USDT')
   const [side, setSide] = useState<'long' | 'short'>('long')
   const [openMode] = useState<OpenMode>('risk')
-  const [runMode, setRunMode] = useState<'manual' | 'auto'>('auto')
   const [price, setPrice] = useState(64000)
   const [leverage, setLeverage] = useState(5)
   const [allocatedMargin, setAllocatedMargin] = useState(1000)
@@ -87,9 +97,13 @@ export default function PaperTradePanel({ onOpen, onMark, onClose, onReset, onRu
   const [isStartingRobot, setIsStartingRobot] = useState(false)
   const [isRobotRunning, setIsRobotRunning] = useState(false)
   const [robotFeedback, setRobotFeedback] = useState('')
-  const [selectedRobotSymbols, setSelectedRobotSymbols] = useState<Array<'BTC_USDT' | 'ETH_USDT'>>(['BTC_USDT', 'ETH_USDT'])
+  const [tradeActionFeedback, setTradeActionFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null)
+  const [isSubmittingMark, setIsSubmittingMark] = useState(false)
+  const [isSubmittingClose, setIsSubmittingClose] = useState(false)
+  const [selectedRobotSymbols, setSelectedRobotSymbols] = useState<Array<'BTC_USDT' | 'ETH_USDT'>>([])
   const [leverageOptions, setLeverageOptions] = useState<number[]>([])
   const [contractLeverageMax, setContractLeverageMax] = useState(100)
+  const [directionMode, setDirectionMode] = useState<TradeDirectionMode>('auto')
 
   useEffect(() => {
     if (typeof robotRunning === 'boolean') {
@@ -97,17 +111,25 @@ export default function PaperTradePanel({ onOpen, onMark, onClose, onReset, onRu
     }
   }, [robotRunning])
 
+  const robotActive = canPauseRobot({ robotRunning: isRobotRunning, robotEnabled })
+  const pauseAvailable = robotActive
+
   const selectedPreset = useMemo(
     () => strategyPresets.find((item) => String(item.slotId) === selectedStrategySlot) || null,
     [selectedStrategySlot, strategyPresets],
   )
+  const formatStrategyTypeLabel = (strategyType?: 'classic' | 'turtle' | 'ict') => {
+    if (strategyType === 'turtle') return '海龟策略'
+    if (strategyType === 'ict') return 'ICT 三周期'
+    return '经典策略'
+  }
   const activeSymbol = selectedPreset?.config.symbol ?? symbol
   const selectedStrategySummary = useMemo(() => {
     if (!selectedPreset) return null
     return [
-      selectedPreset.config.strategy_type === 'turtle' ? '海龟策略' : '经典策略',
+      formatStrategyTypeLabel(selectedPreset.config.strategy_type),
       `${selectedPreset.config.symbol}`,
-      `${selectedPreset.config.leverage}x`,
+      '??????????????',
       selectedPreset.config.strategy_type === 'turtle'
         ? `Entry ${selectedPreset.config.turtle_entry_period ?? '-'} / Exit ${selectedPreset.config.turtle_exit_period ?? '-'} / ATR ${selectedPreset.config.turtle_atr_period ?? '-'}`
         : `SL ${(selectedPreset.config.stop_loss_pct * 100).toFixed(2)}% / TP ${(selectedPreset.config.take_profit_pct * 100).toFixed(2)}% / Risk ${(selectedPreset.config.risk_per_trade_pct * 100).toFixed(2)}%`,
@@ -198,22 +220,25 @@ export default function PaperTradePanel({ onOpen, onMark, onClose, onReset, onRu
     // 只在切换策略槽位时同步参数，避免数据刷新覆盖用户手动选择
     if (prevSlotIdRef.current === selectedPreset.slotId) return
     prevSlotIdRef.current = selectedPreset.slotId
-    setSymbol(selectedPreset.config.symbol)
-    setLeverage(selectedPreset.config.leverage)
-    setStopLossPct(selectedPreset.config.stop_loss_pct)
-    setTakeProfitPct(selectedPreset.config.take_profit_pct)
-    setRiskPerTradePct(selectedPreset.config.risk_per_trade_pct)
-    setFeeRate(selectedPreset.config.fee_rate)
-    setSlippageRate(selectedPreset.config.slippage_rate)
-  }, [selectedPreset, syncWithStrategy])
+    const nextState = buildPresetSyncedTradeState({
+      currentLeverage: leverage,
+      presetConfig: selectedPreset.config,
+    })
+    setSymbol(nextState.symbol)
+    setStopLossPct(nextState.stopLossPct)
+    setTakeProfitPct(nextState.takeProfitPct)
+    setRiskPerTradePct(nextState.riskPerTradePct)
+    setFeeRate(nextState.feeRate)
+    setSlippageRate(nextState.slippageRate)
+  }, [leverage, selectedPreset, syncWithStrategy])
 
   useEffect(() => {
     if (!selectedPreset) return
-    setSelectedRobotSymbols((prev) => {
-      if (prev.length > 0) return prev
-      return ['BTC_USDT', 'ETH_USDT']
-    })
-  }, [selectedPreset])
+    const presetSymbols = selectedPreset.config.symbols && selectedPreset.config.symbols.length > 0
+      ? selectedPreset.config.symbols
+      : [selectedPreset.config.symbol]
+    setSelectedRobotSymbols(Array.from(new Set(presetSymbols)))
+  }, [selectedPreset?.slotId])
 
   // 实盘模式下获取合约杠杆范围
   useEffect(() => {
@@ -250,6 +275,36 @@ export default function PaperTradePanel({ onOpen, onMark, onClose, onReset, onRu
     [selectedPositionId, symbolPositions],
   )
 
+  async function handleMarkPosition() {
+    if (!selectedPosition || isSubmittingMark) return
+    setIsSubmittingMark(true)
+    setTradeActionFeedback(null)
+    try {
+      await onMark({ symbol, mark_price: markPrice, position_id: selectedPosition.position_id || undefined })
+      setTradeActionFeedback({ type: 'success', message: '持仓标记价已更新。' })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      setTradeActionFeedback({ type: 'error', message: `更新标记价失败：${message}` })
+    } finally {
+      setIsSubmittingMark(false)
+    }
+  }
+
+  async function handleClosePosition() {
+    if (!selectedPosition || isSubmittingClose) return
+    setIsSubmittingClose(true)
+    setTradeActionFeedback(null)
+    try {
+      await onClose({ symbol, price: closingPrice, position_id: selectedPosition.position_id || undefined })
+      setTradeActionFeedback({ type: 'success', message: '模拟平仓已完成。' })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      setTradeActionFeedback({ type: 'error', message: `模拟平仓失败：${message}` })
+    } finally {
+      setIsSubmittingClose(false)
+    }
+  }
+
   return (
     <div style={{ display: 'grid', gap: 16 }}>
       {/* 实盘/模拟 选择器 */}
@@ -260,24 +315,24 @@ export default function PaperTradePanel({ onOpen, onMark, onClose, onReset, onRu
           disabled={!liveConnected}
           style={{
             ...slotCardStyle,
-            background: tradeMode === 'live' ? 'linear-gradient(135deg, rgba(15,23,42,0.98) 0%, rgba(6,95,70,0.92) 100%)' : 'linear-gradient(180deg, rgba(15,23,42,0.92) 0%, rgba(2,6,23,0.94) 100%)',
-            color: tradeMode === 'live' ? '#fff' : liveConnected ? '#e2e8f0' : '#475569',
-            border: tradeMode === 'live' ? '1px solid rgba(52,211,153,0.4)' : liveConnected ? '1px solid rgba(51,65,85,0.78)' : '1px solid rgba(51,65,85,0.4)',
-            boxShadow: tradeMode === 'live' ? '0 16px 32px rgba(6,95,70,0.18)' : '0 12px 24px rgba(2,8,23,0.18)',
+            background: tradeMode === 'live' ? 'linear-gradient(135deg, rgba(31,35,41,0.98) 0%, rgba(18,20,24,1) 100%)' : 'linear-gradient(180deg, rgba(15,17,22,0.92) 0%, rgba(10,12,16,0.94) 100%)',
+            color: tradeMode === 'live' ? '#fff' : liveConnected ? '#e2e8f0' : '#6b7280',
+            border: tradeMode === 'live' ? '1px solid rgba(255,255,255,0.12)' : liveConnected ? '1px solid rgba(255,255,255,0.08)' : '1px solid rgba(255,255,255,0.05)',
+            boxShadow: '0 12px 24px rgba(2,8,23,0.18)',
             opacity: liveConnected ? 1 : 0.5,
             cursor: liveConnected ? 'pointer' : 'not-allowed',
           }}
         >
           <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'center' }}>
             <strong style={{ fontSize: 14 }}>实盘交易</strong>
-            <span style={{ ...slotPillStyle, background: tradeMode === 'live' ? 'rgba(255,255,255,0.16)' : liveConnected ? 'rgba(16,185,129,0.14)' : 'rgba(71,85,105,0.2)', color: tradeMode === 'live' ? '#d1fae5' : liveConnected ? '#a7f3d0' : '#64748b' }}>
+            <span style={{ ...slotPillStyle, background: 'rgba(255,255,255,0.08)', color: '#e5e7eb' }}>
               {liveConnected ? 'LIVE' : '未连接'}
             </span>
           </div>
-          <div style={{ fontSize: 12, color: tradeMode === 'live' ? 'rgba(255,255,255,0.78)' : '#94a3b8', lineHeight: 1.65, marginTop: 8 }}>
+          <div style={{ fontSize: 12, color: tradeMode === 'live' ? 'rgba(255,255,255,0.78)' : '#9ca3af', lineHeight: 1.65, marginTop: 8 }}>
             Gate.io 合约真实账户
           </div>
-          <div style={{ fontSize: 12, color: tradeMode === 'live' ? 'rgba(255,255,255,0.72)' : '#64748b', lineHeight: 1.65, marginTop: 4 }}>
+          <div style={{ fontSize: 12, color: tradeMode === 'live' ? 'rgba(255,255,255,0.72)' : '#9ca3af', lineHeight: 1.65, marginTop: 4 }}>
             {liveConnected ? `权益 $${liveEquity.toFixed(2)} · ${livePositions.length} 持仓` : '请先在合约实盘账户中连接'}
           </div>
         </button>
@@ -286,20 +341,20 @@ export default function PaperTradePanel({ onOpen, onMark, onClose, onReset, onRu
           onClick={() => onTradeModeChange?.('paper')}
           style={{
             ...slotCardStyle,
-            background: tradeMode === 'paper' ? 'linear-gradient(135deg, rgba(15,23,42,0.98) 0%, rgba(37,99,235,0.96) 100%)' : 'linear-gradient(180deg, rgba(15,23,42,0.92) 0%, rgba(2,6,23,0.94) 100%)',
+            background: tradeMode === 'paper' ? 'linear-gradient(135deg, rgba(31,35,41,0.98) 0%, rgba(18,20,24,1) 100%)' : 'linear-gradient(180deg, rgba(15,17,22,0.92) 0%, rgba(10,12,16,0.94) 100%)',
             color: tradeMode === 'paper' ? '#fff' : '#e2e8f0',
-            border: tradeMode === 'paper' ? '1px solid rgba(96,165,250,0.4)' : '1px solid rgba(51,65,85,0.78)',
-            boxShadow: tradeMode === 'paper' ? '0 16px 32px rgba(37,99,235,0.18)' : '0 12px 24px rgba(2,8,23,0.18)',
+            border: tradeMode === 'paper' ? '1px solid rgba(255,255,255,0.12)' : '1px solid rgba(255,255,255,0.08)',
+            boxShadow: '0 12px 24px rgba(2,8,23,0.18)',
           }}
         >
           <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'center' }}>
             <strong style={{ fontSize: 14 }}>模拟交易</strong>
-            <span style={{ ...slotPillStyle, background: tradeMode === 'paper' ? 'rgba(255,255,255,0.16)' : 'rgba(14,165,233,0.14)', color: tradeMode === 'paper' ? '#dbeafe' : '#bae6fd' }}>PAPER</span>
+            <span style={{ ...slotPillStyle, background: 'rgba(255,255,255,0.08)', color: '#e5e7eb' }}>PAPER</span>
           </div>
-          <div style={{ fontSize: 12, color: tradeMode === 'paper' ? 'rgba(255,255,255,0.78)' : '#94a3b8', lineHeight: 1.65, marginTop: 8 }}>
+          <div style={{ fontSize: 12, color: tradeMode === 'paper' ? 'rgba(255,255,255,0.78)' : '#9ca3af', lineHeight: 1.65, marginTop: 8 }}>
             模拟纸面交易，无真实资金
           </div>
-          <div style={{ fontSize: 12, color: tradeMode === 'paper' ? 'rgba(255,255,255,0.72)' : '#64748b', lineHeight: 1.65, marginTop: 4 }}>
+          <div style={{ fontSize: 12, color: tradeMode === 'paper' ? 'rgba(255,255,255,0.72)' : '#9ca3af', lineHeight: 1.65, marginTop: 4 }}>
             权益 ${accountEquity.toFixed(2)} · 策略驱动
           </div>
         </button>
@@ -318,9 +373,9 @@ export default function PaperTradePanel({ onOpen, onMark, onClose, onReset, onRu
             style={{
               padding: '8px 12px',
               borderRadius: 12,
-              border: '1px solid rgba(239,68,68,0.35)',
-              background: 'rgba(239,68,68,0.12)',
-              color: '#fca5a5',
+              border: '1px solid rgba(255,255,255,0.08)',
+              background: 'rgba(255,255,255,0.04)',
+              color: '#d1d5db',
               fontSize: 12,
               fontWeight: 700,
               cursor: 'pointer',
@@ -379,7 +434,7 @@ export default function PaperTradePanel({ onOpen, onMark, onClose, onReset, onRu
                           background: active ? 'linear-gradient(135deg, rgba(15,23,42,0.98) 0%, rgba(37,99,235,0.96) 100%)' : 'linear-gradient(180deg, rgba(15,23,42,0.92) 0%, rgba(2,6,23,0.94) 100%)',
                           color: active ? '#fff' : '#e2e8f0',
                           border: active ? '1px solid rgba(96,165,250,0.4)' : '1px solid rgba(51,65,85,0.78)',
-                          boxShadow: active ? '0 16px 32px rgba(37,99,235,0.18)' : '0 12px 24px rgba(2,8,23,0.18)',
+                          boxShadow: active ? '0 8px 18px rgba(0,0,0,0.14)' : '0 8px 18px rgba(0,0,0,0.12)',
                         }}
                       >
                         <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'center' }}>
@@ -387,7 +442,10 @@ export default function PaperTradePanel({ onOpen, onMark, onClose, onReset, onRu
                           <span style={{ ...slotPillStyle, background: active ? 'rgba(255,255,255,0.16)' : 'rgba(14,165,233,0.14)', color: active ? '#dbeafe' : '#bae6fd' }}>#{item.slotId}</span>
                         </div>
                         <div style={{ fontSize: 12, color: active ? 'rgba(255,255,255,0.78)' : '#cbd5e1', lineHeight: 1.65, marginTop: 8 }}>
-                          {(item.config.strategy_type === 'turtle' ? '海龟策略' : '经典策略')} · {item.config.symbol} · {item.config.leverage}x
+                          {formatStrategyTypeLabel(item.config.strategy_type)} · {item.config.symbol}
+                        </div>
+                        <div style={{ fontSize: 11, color: active ? 'rgba(255,255,255,0.62)' : '#64748b', lineHeight: 1.55, marginTop: 2 }}>
+                          实际杠杆以交易工作区选择为准
                         </div>
                         <div style={{ fontSize: 12, color: active ? 'rgba(255,255,255,0.72)' : '#94a3b8', lineHeight: 1.65, marginTop: 4 }}>
                           {item.config.strategy_type === 'turtle'
@@ -406,7 +464,7 @@ export default function PaperTradePanel({ onOpen, onMark, onClose, onReset, onRu
               <div style={strategySummaryCardStyle}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
                   <div>
-                    <div style={panelEyebrowStyle}>Selected Strategy</div>
+                    <div style={panelEyebrowStyle}>已选策略</div>
                     <h4 style={{ ...panelTitleStyle, marginTop: 4 }}>当前已选：{selectedPreset.name}（策略 {selectedPreset.slotId}）</h4>
                   </div>
                   <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
@@ -424,12 +482,14 @@ export default function PaperTradePanel({ onOpen, onMark, onClose, onReset, onRu
 
             {selectedPreset ? (
               <div style={hintStyle}>
-                已加载策略 {selectedPreset.slotId} · {selectedPreset.name} ｜ {(selectedPreset.config.strategy_type === 'turtle' ? '海龟策略' : '经典策略')} ｜ leverage {selectedPreset.config.leverage}
+                已加载策略 {selectedPreset.slotId} · {selectedPreset.name} ｜ {formatStrategyTypeLabel(selectedPreset.config.strategy_type)} ｜ 实际杠杆以交易工作区选择为准
                 {selectedPreset.config.strategy_type === 'turtle'
                   ? ` ｜ Entry ${selectedPreset.config.turtle_entry_period ?? '-'} ｜ Exit ${selectedPreset.config.turtle_exit_period ?? '-'} ｜ ATR ${selectedPreset.config.turtle_atr_period ?? '-'}`
                   : ` ｜ stop loss ${(selectedPreset.config.stop_loss_pct * 100).toFixed(2)}% ｜ risk ${(selectedPreset.config.risk_per_trade_pct * 100).toFixed(2)}%`}
               </div>
             ) : null}
+
+            <SelectField label={'\u4ea4\u6613\u65b9\u5411'} value={directionMode} onChange={(value) => setDirectionMode(value as TradeDirectionMode)} options={getTradeDirectionModeOptions()} />
 
             {tradeMode === 'live' && liveConnected && leverageOptions.length > 0 ? (
               <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
@@ -531,7 +591,7 @@ export default function PaperTradePanel({ onOpen, onMark, onClose, onReset, onRu
                       style={{
                         padding: '4px 10px',
                         borderRadius: 6,
-                        border: `1px solid ${leverage === lv ? 'rgba(245,158,11,0.6)' : 'rgba(51,65,85,0.8)'}`,
+                        border: `1px solid ${leverage === lv ? 'rgba(245,158,11,0.6)' : 'rgba(51,65,85,0.8)'}` ,
                         background: leverage === lv ? 'rgba(245,158,11,0.15)' : 'rgba(15,23,42,0.6)',
                         color: leverage === lv ? '#fcd34d' : '#94a3b8',
                         fontSize: 13,
@@ -544,61 +604,42 @@ export default function PaperTradePanel({ onOpen, onMark, onClose, onReset, onRu
                   ))}
                 </div>
               </div>
-              <SelectField label="运行模式" value={runMode} onChange={(v) => setRunMode(v as 'manual' | 'auto')} options={[{ value: 'auto', label: '自动（策略信号）' }, { value: 'manual', label: '手动选方向' }]} />
+              <SelectField label="运行模式" value={directionMode} onChange={(value) => setDirectionMode(value as TradeDirectionMode)} options={getTradeDirectionModeOptions()} />
             </div>
 
-            {runMode === 'manual' ? (
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-                <SelectField label="手动方向" value={side} onChange={(v) => setSide(v as 'long' | 'short')} options={['long', 'short']} />
-                <div></div>
-              </div>
-            ) : null}
-
             <div style={hintStyle}>
-              {runMode === 'auto'
-                ? '自动模式：机器人根据策略信号自动判断方向（long/short），无需手动选择。'
-                : '手动模式：手动选择方向后开仓。'}
-              参数来源：策略配置（杠杆 / 止损 / 止盈 / 风险比例 / 手续费 / 滑点）。
+              当前 Trade 区只保留自动交易。机器人会根据策略信号自动判断方向，参数统一取自所选策略配置。
             </div>
 
             <button
               onClick={async () => {
                 if (!selectedPreset || isStartingRobot) return
+                const stopLossGuard = validateStopLossAgainstLiquidation({
+                  leverage,
+                  stopLossPct: selectedPreset.config.stop_loss_pct,
+                })
+                if (!stopLossGuard.ok) {
+                  setRobotFeedback(
+                    `当前 ${leverage}x 杠杆下，估算强平缓冲仅 ${(stopLossGuard.liquidationBufferPct * 100).toFixed(2)}%，但止损为 ${(selectedPreset.config.stop_loss_pct * 100).toFixed(2)}%，会先强平后止损，请降低杠杆或缩小止损。`,
+                  )
+                  return
+                }
                 setIsStartingRobot(true)
                 setRobotFeedback('机器人启动中...')
                 try {
-                  if (runMode === 'auto' && onRunStrategyOnce) {
-                    await onRunStrategyOnce(selectedRobotSymbols, leverage, tradeMode)
-                    await onStartRobot?.(selectedRobotSymbols)
-                    setIsRobotRunning(true)
-                    onRobotRunningChange?.(true)
-                    onRobotStateChange?.({ running: true, symbol: selectedRobotSymbols[0] })
-                    setRobotFeedback(`自动运行完成（策略 ${selectedPreset.slotId} / ${selectedRobotSymbols.join(', ')}）`)
-                  } else {
-                    // 手动模式：手动选择方向开仓
-                    const runtimePrice = liveTicker?.last_price ?? price
-                    const runtimeStopLoss = side === 'long'
-                      ? runtimePrice * (1 - selectedPreset.config.stop_loss_pct)
-                      : runtimePrice * (1 + selectedPreset.config.stop_loss_pct)
-                    await onOpen({
-                      symbol: selectedPreset.config.symbol,
-                      side,
-                      price: runtimePrice,
-                      leverage,
-                      allocated_margin: allocatedMargin,
-                      stop_loss_price: runtimeStopLoss,
-                      risk_per_trade_pct: selectedPreset.config.risk_per_trade_pct,
-                      stop_loss_pct: selectedPreset.config.stop_loss_pct,
-                      take_profit_pct: selectedPreset.config.take_profit_pct,
-                      fee_rate: selectedPreset.config.fee_rate,
-                      slippage_rate: selectedPreset.config.slippage_rate,
-                    })
-                    await onStartRobot?.()
-                    setIsRobotRunning(true)
-                    onRobotRunningChange?.(true)
-                    onRobotStateChange?.({ running: true, symbol: selectedPreset.config.symbol })
-                    setRobotFeedback(`已启动机器人（策略 ${selectedPreset.slotId}）`)
+                  if (onRunStrategyOnce) {
+                    const probeResult = await onRunStrategyOnce(selectedRobotSymbols, leverage, tradeMode, directionMode)
+                    const blockReason = getRunnerStartBlockReasonAfterProbe(probeResult as any)
+                    if (blockReason) {
+                      setRobotFeedback(`启动已拦截：${blockReason}`)
+                      return
+                    }
                   }
+                  await onStartRobot?.(selectedRobotSymbols)
+                  setIsRobotRunning(true)
+                  onRobotRunningChange?.(true)
+                  onRobotStateChange?.({ running: true, symbol: selectedRobotSymbols[0] })
+                  setRobotFeedback(`自动运行已启动（策略 ${selectedPreset.slotId} / ${selectedRobotSymbols.join(', ')}）`)
                 } catch (error) {
                   const message = error instanceof Error ? error.message : String(error)
                   setRobotFeedback(`启动失败：${message}`)
@@ -606,29 +647,33 @@ export default function PaperTradePanel({ onOpen, onMark, onClose, onReset, onRu
                   setIsStartingRobot(false)
                 }
               }}
-              disabled={!selectedPreset || isStartingRobot}
-              style={{ ...primaryButtonStyle, opacity: selectedPreset && !isStartingRobot ? 1 : 0.55, cursor: selectedPreset && !isStartingRobot ? 'pointer' : 'not-allowed' }}
+              disabled={!selectedPreset || isStartingRobot || robotActive}
+              style={{ ...primaryButtonStyle, opacity: selectedPreset && !isStartingRobot && !robotActive ? 1 : 0.55, cursor: selectedPreset && !isStartingRobot && !robotActive ? 'pointer' : 'not-allowed' }}
             >
-              {!selectedPreset ? '请先选择策略' : isStartingRobot ? '启动中...' : isRobotRunning ? '已启动机器人' : runMode === 'auto' ? `${tradeMode === 'live' ? '实盘' : '模拟'}运行策略 ${selectedPreset.slotId}` : `手动开仓（${side}）`}
+              {!selectedPreset ? '请先选择策略' : isStartingRobot ? '启动中...' : robotActive ? '已启用自动轮询' : `${tradeMode === 'live' ? '实盘' : '模拟'}运行策略 ${selectedPreset.slotId}`}
             </button>
 
             <button
               type="button"
               onClick={async () => {
-                setIsRobotRunning(false)
-                onRobotRunningChange?.(false)
-                onRobotStateChange?.({ running: false })
                 try {
                   await onPauseRobot?.()
-                } catch {}
-                setRobotFeedback('机器人已暂停')
+                  setIsRobotRunning(false)
+                  onRobotRunningChange?.(false)
+                  onRobotStateChange?.({ running: false })
+                  setRobotFeedback('机器人已暂停')
+                } catch (error) {
+                  const message = error instanceof Error ? error.message : String(error)
+                  setRobotFeedback(`暂停失败：${message}`)
+                  return
+                }
               }}
-              disabled={!isRobotRunning || isStartingRobot}
+              disabled={!pauseAvailable || isStartingRobot}
               style={{
                 ...primaryButtonStyle,
                 background: 'linear-gradient(135deg, #475569 0%, #334155 100%)',
-                opacity: isRobotRunning && !isStartingRobot ? 1 : 0.55,
-                cursor: isRobotRunning && !isStartingRobot ? 'pointer' : 'not-allowed',
+                opacity: pauseAvailable && !isStartingRobot ? 1 : 0.55,
+                cursor: pauseAvailable && !isStartingRobot ? 'pointer' : 'not-allowed',
                 marginTop: 10,
               }}
             >
@@ -640,35 +685,67 @@ export default function PaperTradePanel({ onOpen, onMark, onClose, onReset, onRu
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
             <ActionPanel
-              eyebrow="Mark Position"
+              eyebrow="更新持仓标记"
               title="更新标记价"
               description="用于盯市和刷新浮盈亏。"
               accent="purple"
               control={<NumberField label="标记价" value={markPrice} onChange={setMarkPrice} />}
               button={
-                <button onClick={() => onMark({ symbol, mark_price: markPrice, position_id: selectedPosition?.position_id || undefined })} style={secondaryButtonStyle('#7c3aed')}>
-                  更新标记价
+                <button
+                  onClick={handleMarkPosition}
+                  disabled={!selectedPosition || isSubmittingMark}
+                  style={{
+                    ...secondaryButtonStyle('#2b3038'),
+                    opacity: selectedPosition && !isSubmittingMark ? 1 : 0.5,
+                    cursor: selectedPosition && !isSubmittingMark ? 'pointer' : 'not-allowed',
+                  }}
+                >
+                  {selectedPosition ? (isSubmittingMark ? '更新中...' : '更新标记价') : '暂无可更新持仓'}
                 </button>
               }
             />
             <ActionPanel
-              eyebrow="Close Position"
+              eyebrow="模拟平仓"
               title="模拟平仓"
               description="录入平仓价格，生成最终 realized pnl。"
               accent="blue"
               control={<NumberField label="平仓价" value={closingPrice} onChange={setClosingPrice} />}
               button={
-                <button onClick={() => onClose({ symbol, price: closingPrice, position_id: selectedPosition?.position_id || undefined })} style={secondaryButtonStyle('#2563eb')}>
-                  模拟平仓
+                <button
+                  onClick={handleClosePosition}
+                  disabled={!selectedPosition || isSubmittingClose}
+                  style={{
+                    ...secondaryButtonStyle('#2b3038'),
+                    opacity: selectedPosition && !isSubmittingClose ? 1 : 0.5,
+                    cursor: selectedPosition && !isSubmittingClose ? 'pointer' : 'not-allowed',
+                  }}
+                >
+                  {selectedPosition ? (isSubmittingClose ? '平仓中...' : '模拟平仓') : '暂无可平仓持仓'}
                 </button>
               }
             />
           </div>
+          {tradeActionFeedback ? (
+            <div
+              style={{
+                marginTop: 12,
+                padding: '12px 14px',
+                borderRadius: 12,
+                border: tradeActionFeedback.type === 'success' ? '1px solid rgba(34,197,94,0.28)' : '1px solid rgba(248,113,113,0.28)',
+                background: tradeActionFeedback.type === 'success' ? 'rgba(20,83,45,0.22)' : 'rgba(127,29,29,0.22)',
+                color: tradeActionFeedback.type === 'success' ? '#bbf7d0' : '#fecaca',
+                fontSize: 13,
+                lineHeight: 1.6,
+              }}
+            >
+              {tradeActionFeedback.message}
+            </div>
+          ) : null}
         </div>
 
         <div style={{ display: 'grid', gap: 16 }}>
           <div style={sidePanelStyle}>
-            <div style={panelEyebrowStyle}>Risk Preview</div>
+            <div style={panelEyebrowStyle}>风险预估</div>
             <h4 style={panelTitleStyle}>实时风险预估</h4>
             <div style={{ display: 'grid', gap: 10, marginTop: 12 }}>
               <MetricCard label="预估仓位" value={activePreview.qty.toFixed(6)} />
@@ -685,7 +762,7 @@ export default function PaperTradePanel({ onOpen, onMark, onClose, onReset, onRu
           </div>
 
           <div style={sidePanelStyle}>
-            <div style={panelEyebrowStyle}>Execution Notes</div>
+            <div style={panelEyebrowStyle}>操作提示</div>
             <h4 style={panelTitleStyle}>操作提示</h4>
             <ul style={{ margin: '12px 0 0', paddingLeft: 18, color: '#cbd5e1', fontSize: 13, lineHeight: 1.7 }}>
               <li>先确认方向、价格、杠杆，再看预估名义价值和最大风险。</li>
@@ -731,8 +808,8 @@ function ModeChip({ active = false, children }: { active?: boolean; children: Re
       padding: '8px 12px',
       fontWeight: 700,
       cursor: 'default',
-      background: active ? 'linear-gradient(135deg, rgba(30,41,59,0.96) 0%, rgba(29,78,216,0.88) 100%)' : 'rgba(15,23,42,0.58)',
-      color: active ? '#f8fafc' : '#cbd5e1',
+      background: active ? 'linear-gradient(135deg, rgba(34,39,46,0.96) 0%, rgba(24,27,32,0.96) 100%)' : 'rgba(255,255,255,0.06)',
+      color: '#e5e7eb',
     }}>
       {children}
     </button>
@@ -743,8 +820,8 @@ function ActionPanel({ eyebrow, title, description, accent, control, button }: {
   return (
     <div style={{
       ...panelStyle,
-      border: accent === 'purple' ? '1px solid rgba(124,58,237,0.28)' : '1px solid rgba(37,99,235,0.26)',
-      boxShadow: accent === 'purple' ? '0 14px 32px rgba(76,29,149,0.22)' : '0 14px 32px rgba(30,64,175,0.2)',
+      border: '1px solid rgba(255,255,255,0.08)',
+      boxShadow: '0 14px 32px rgba(0,0,0,0.18)',
     }}>
       <div style={panelEyebrowStyle}>{eyebrow}</div>
       <h4 style={panelTitleStyle}>{title}</h4>
@@ -757,7 +834,7 @@ function ActionPanel({ eyebrow, title, description, accent, control, button }: {
 
 function HeroStat({ label, value }: { label: string; value: string }) {
   return (
-    <div style={{ padding: 12, borderRadius: 16, background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.12)' }}>
+    <div style={{ padding: 12, borderRadius: 16, background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.08)' }}>
       <div style={{ fontSize: 11, color: 'rgba(226,232,240,0.74)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>{label}</div>
       <div style={{ marginTop: 8, fontSize: 18, fontWeight: 800, color: '#f8fafc' }}>{value}</div>
     </div>
@@ -804,8 +881,8 @@ const slotPillStyle: React.CSSProperties = {
 const heroCardStyle: React.CSSProperties = {
   borderRadius: 24,
   padding: 20,
-  background: 'linear-gradient(135deg, #0f172a 0%, #1e293b 55%, #1d4ed8 100%)',
-  boxShadow: '0 24px 48px rgba(15,23,42,0.18)',
+  background: 'linear-gradient(135deg, #121418 0%, #1a1d22 55%, #23272d 100%)',
+  boxShadow: '0 14px 28px rgba(0,0,0,0.16)',
   display: 'grid',
   gap: 18,
 }
@@ -817,10 +894,10 @@ const heroStatsGridStyle: React.CSSProperties = {
 }
 
 const panelStyle: React.CSSProperties = {
-  border: '1px solid rgba(51,65,85,0.78)',
+  border: '1px solid rgba(255,255,255,0.08)',
   borderRadius: 22,
-  background: 'linear-gradient(180deg, rgba(15,23,42,0.94) 0%, rgba(2,6,23,0.96) 100%)',
-  boxShadow: '0 16px 36px rgba(2,8,23,0.28)',
+  background: 'linear-gradient(180deg, rgba(15,17,22,0.94) 0%, rgba(10,12,16,0.96) 100%)',
+  boxShadow: '0 10px 24px rgba(0,0,0,0.14)',
   padding: 18,
 }
 
@@ -848,7 +925,7 @@ const eyebrowStyle: React.CSSProperties = {
 
 const panelEyebrowStyle: React.CSSProperties = {
   fontSize: 11,
-  color: '#38bdf8',
+  color: '#d1d5db',
   textTransform: 'uppercase',
   letterSpacing: '0.08em',
 }
@@ -870,8 +947,8 @@ const fieldLabelStyle: React.CSSProperties = {
 const inputStyle: React.CSSProperties = {
   padding: '11px 12px',
   borderRadius: 12,
-  border: '1px solid rgba(71,85,105,0.7)',
-  background: 'rgba(2,6,23,0.88)',
+  border: '1px solid rgba(255,255,255,0.08)',
+  background: 'rgba(9,11,15,0.92)',
   color: '#f8fafc',
 }
 
@@ -880,26 +957,26 @@ const primaryButtonStyle: React.CSSProperties = {
   padding: '13px 16px',
   borderRadius: 14,
   border: 0,
-  background: 'linear-gradient(135deg, #111827 0%, #1d4ed8 100%)',
+  background: 'linear-gradient(135deg, #20232a 0%, #2b3038 100%)',
   color: '#fff',
   fontWeight: 800,
   cursor: 'pointer',
-  boxShadow: '0 14px 32px rgba(29,78,216,0.18)',
+  boxShadow: '0 8px 18px rgba(0,0,0,0.14)',
 }
 
 const strategySummaryCardStyle: React.CSSProperties = {
   borderRadius: 18,
   padding: 16,
-  background: 'linear-gradient(135deg, rgba(15,23,42,0.9) 0%, rgba(30,41,59,0.96) 100%)',
-  border: '1px solid rgba(59,130,246,0.24)',
-  boxShadow: '0 14px 28px rgba(2,8,23,0.2)',
+  background: 'linear-gradient(135deg, rgba(15,17,22,0.9) 0%, rgba(24,27,32,0.96) 100%)',
+  border: '1px solid rgba(255,255,255,0.08)',
+  boxShadow: '0 8px 18px rgba(0,0,0,0.12)',
 }
 
 const strategySlotBadgeStyle: React.CSSProperties = {
   padding: '8px 12px',
   borderRadius: 999,
-  background: 'rgba(37,99,235,0.16)',
-  color: '#bfdbfe',
+  background: 'rgba(255,255,255,0.06)',
+  color: '#e5e7eb',
   fontSize: 12,
   fontWeight: 800,
 }
@@ -928,9 +1005,9 @@ function secondaryButtonStyle(background: string): React.CSSProperties {
 
 const hintStyle: React.CSSProperties = {
   fontSize: 12,
-  color: '#475569',
-  background: 'rgba(15,23,42,0.72)',
-  border: '1px solid rgba(51,65,85,0.7)',
+  color: '#9ca3af',
+  background: 'rgba(255,255,255,0.04)',
+  border: '1px solid rgba(255,255,255,0.06)',
   borderRadius: 12,
   padding: '10px 12px',
 }

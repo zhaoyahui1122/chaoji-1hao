@@ -50,6 +50,8 @@ class StrategyConfig(BaseModel):
     kdj_oversold: float = Field(default=20, ge=0, le=50)
     min_signal_score: int = Field(default=3, ge=1, le=10)
     churn_guard_enabled: bool = False
+    classic_trend_filter_enabled: bool = False
+    classic_cooldown_bars: int = Field(default=0, ge=0, le=100)
     turtle_entry_period: int = Field(default=20, ge=5, le=100)
     turtle_exit_period: int = Field(default=10, ge=2, le=50)
     turtle_atr_period: int = Field(default=14, ge=2, le=100)

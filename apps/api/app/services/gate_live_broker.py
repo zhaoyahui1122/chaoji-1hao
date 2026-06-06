@@ -59,6 +59,34 @@ def _round_price_tick(price: float, contract: str | None = None) -> float:
     return round(round(price / tick) * tick, decimals)
 
 
+def _to_float(value: Any, default: float = 0.0) -> float:
+    try:
+        if value is None or value == "":
+            return default
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _account_equity(account: dict[str, Any]) -> float:
+    """Gate 合约账户权益：优先使用 total + unrealised_pnl，缺字段时再退回 available。"""
+    total = _to_float(account.get("total"))
+    if total <= 0:
+        total = _to_float(account.get("available") or account.get("available_balance"))
+    return total + _to_float(account.get("unrealised_pnl") or account.get("unrealized_pnl"))
+
+
+def _gate_trigger_rule(side: str, trigger_type: str) -> int:
+    """Gate 价格触发规则：1 表示 >= 触发价，2 表示 <= 触发价。"""
+    normalized_side = side.lower()
+    normalized_type = trigger_type.lower()
+    if normalized_type == "stop_loss":
+        return 2 if normalized_side == "long" else 1
+    if normalized_type == "take_profit":
+        return 1 if normalized_side == "long" else 2
+    raise ValueError(f"unsupported_trigger_type:{trigger_type}")
+
+
 def _get_quanto_multiplier(contract: str) -> float:
     """Fetch contract quanto_multiplier from Gate (cached)."""
     return _get_contract_info(contract).get("quanto_multiplier", 1.0)
@@ -73,6 +101,7 @@ class LivePosition:
     qty: float
     entry_price: float
     mark_price: float
+    quanto_multiplier: float = 1.0
 
 
 @dataclass
@@ -115,7 +144,7 @@ class GateLiveBroker:
         try:
             api_key, api_secret = self._creds()
             account = fetch_futures_account(api_key, api_secret)
-            return float(account.get("available", 0)) + float(account.get("unrealised_pnl", 0))
+            return _account_equity(account)
         except Exception:
             return 0.0
 
@@ -132,6 +161,86 @@ class GateLiveBroker:
     def orders(self) -> list[LiveOrder]:
         return self._orders
 
+    def _emergency_close_opened_order(
+        self,
+        *,
+        contract: str,
+        side: str,
+        order_size: int,
+        execution_price: float,
+        api_key: str,
+        api_secret: str,
+        source: str,
+        meta: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        """止损挂单失败后的保护性平仓：只发 reduce-only 市价反向单，不依赖本地持仓缓存。"""
+        close_size = -int(order_size)
+        close_body = json.dumps({
+            "contract": contract,
+            "size": close_size,
+            "price": "0",
+            "tif": "ioc",
+            "reduce_only": True,
+        })
+        close_result = _gate_private_request(
+            "POST",
+            GATE_FUTURES_ORDERS_PATH,
+            api_key=api_key,
+            api_secret=api_secret,
+            body=close_body,
+        )
+        close_fill = float(
+            close_result.get("fill_price")
+            or close_result.get("avg_deal_price")
+            or close_result.get("price")
+            or 0
+        )
+        close_price = close_fill if close_fill > 0 else execution_price
+        qty = abs(float(order_size))
+        emergency_meta = {
+            **(meta or {}),
+            "emergency_close": True,
+            "reason": "stop_loss_order_failed",
+        }
+        self._orders.append(LiveOrder(
+            position_id=contract,
+            symbol=contract,
+            side=side,
+            price=close_price,
+            qty=qty,
+            status=str(close_result.get("status", "filled")),
+            event_type="close",
+            source=source,
+            meta_json=json.dumps(emergency_meta),
+        ))
+        append_order_event(
+            symbol=contract,
+            side=side,
+            price=close_price,
+            qty=qty,
+            status="filled",
+            event_type="close",
+            position_id=contract,
+            source=source,
+            meta=emergency_meta,
+            trade_mode="live",
+        )
+        logger.error(
+            "[LIVE] Emergency reduce-only close submitted after SL failure: contract=%s size=%s fill=%.1f",
+            contract,
+            close_size,
+            close_price,
+        )
+        return {
+            "ok": True,
+            "symbol": contract,
+            "side": side,
+            "qty": qty,
+            "size": close_size,
+            "execution_price_actual": close_price,
+            "gate_order_id": str(close_result.get("id", "")),
+        }
+
     def sync_positions(self) -> list[LivePosition]:
         """Fetch current positions from Gate and update local cache."""
         api_key, api_secret = self._creds()
@@ -143,6 +252,8 @@ class GateLiveBroker:
             if size == 0:
                 continue
             side = "long" if size > 0 else "short"
+            contract = str(item.get("contract", ""))
+            quanto_multiplier = _get_quanto_multiplier(contract)
             self._positions.append(LivePosition(
                 position_id=str(item.get("contract", "")),
                 symbol=str(item.get("contract", "")),
@@ -151,6 +262,7 @@ class GateLiveBroker:
                 qty=abs(float(size)),
                 entry_price=float(item.get("entry_price", 0)),
                 mark_price=float(item.get("mark_price", 0)),
+                quanto_multiplier=quanto_multiplier,
             ))
             self._raw_positions.append(item)
         self._last_sync = datetime.now(timezone.utc).isoformat()
@@ -309,9 +421,8 @@ class GateLiveBroker:
                     pass
             try:
                 sl_size = -order_size  # Reverse to close
-                # Gate rule: 1 = price <= trigger, 2 = price >= trigger
-                # SL (both long/short): rule=1
-                sl_rule = 1
+                # Gate 价格触发规则：1 = >= 触发价，2 = <= 触发价
+                sl_rule = _gate_trigger_rule(side, "stop_loss")
                 sl_trigger = _round_price_tick(stop_loss_price, contract)
                 sl_body = json.dumps({
                     "contract": contract,
@@ -340,15 +451,70 @@ class GateLiveBroker:
                     self._sl_prices[contract] = stop_loss_price
                 logger.info("[LIVE] Exchange SL placed: contract=%s trigger=%.1f id=%s", contract, sl_trigger, exchange_sl_order_id)
             except Exception as sl_exc:
-                logger.warning("[LIVE] Exchange SL placement failed (non-blocking): %s", sl_exc)
+                logger.error("[LIVE] Exchange SL placement failed, emergency close required: %s", sl_exc)
+                try:
+                    emergency_close = self._emergency_close_opened_order(
+                        contract=contract,
+                        side=side,
+                        order_size=order_size,
+                        execution_price=execution_price,
+                        api_key=api_key,
+                        api_secret=api_secret,
+                        source=source,
+                        meta=meta,
+                    )
+                    self.sync_positions()
+                    return {
+                        "ok": False,
+                        "error": "stop_loss_order_failed",
+                        "detail": str(sl_exc),
+                        "symbol": symbol,
+                        "side": side,
+                        "qty": float(qty),
+                        "price": price,
+                        "execution_price_actual": execution_price,
+                        "leverage": leverage,
+                        "leverage_actual": leverage_actual,
+                        "stop_loss_price": stop_loss_price,
+                        "gate_order_id": order_id,
+                        "exchange_sl_order_id": None,
+                        "emergency_close": emergency_close,
+                    }
+                except Exception as close_exc:
+                    logger.critical(
+                        "[LIVE] Emergency close FAILED after SL placement failure: contract=%s error=%s",
+                        contract,
+                        close_exc,
+                        exc_info=True,
+                    )
+                    self.sync_positions()
+                    return {
+                        "ok": False,
+                        "error": "stop_loss_order_failed_emergency_close_failed",
+                        "detail": str(sl_exc),
+                        "emergency_close_error": str(close_exc),
+                        "symbol": symbol,
+                        "side": side,
+                        "qty": float(qty),
+                        "price": price,
+                        "execution_price_actual": execution_price,
+                        "leverage": leverage,
+                        "leverage_actual": leverage_actual,
+                        "stop_loss_price": stop_loss_price,
+                        "gate_order_id": order_id,
+                        "exchange_sl_order_id": None,
+                    }
 
         # Place take-profit conditional order
         take_profit_price = (meta or {}).get("take_profit_price")
+        take_profit_order_status = "not_requested"
+        take_profit_order_error = None
         if take_profit_price and take_profit_price > 0:
+            take_profit_order_status = "pending"
             try:
                 tp_size = -order_size
-                # TP: long → rule=2 (price rises), short → rule=1 (price drops)
-                tp_rule = 2 if side == "long" else 1
+                # 多单止盈向上触发，空单止盈向下触发
+                tp_rule = _gate_trigger_rule(side, "take_profit")
                 tp_trigger = _round_price_tick(take_profit_price, contract)
                 tp_body = json.dumps({
                     "contract": contract,
@@ -375,8 +541,11 @@ class GateLiveBroker:
                 if tp_order_id:
                     self._tp_order_ids[contract] = tp_order_id
                     self._tp_prices[contract] = take_profit_price
+                    take_profit_order_status = "placed"
                 logger.info("[LIVE] Exchange TP placed: contract=%s trigger=%.1f id=%s", contract, tp_trigger, tp_order_id)
             except Exception as tp_exc:
+                take_profit_order_status = "failed"
+                take_profit_order_error = str(tp_exc)
                 logger.error("[LIVE] Exchange TP FAILED: contract=%s trigger=%.2f rule=%d size=%d error=%s", contract, tp_trigger, tp_rule, tp_size, tp_exc)
 
         # Sync positions after order
@@ -395,6 +564,8 @@ class GateLiveBroker:
             "stop_loss_price": stop_loss_price,
             "gate_order_id": order_id,
             "exchange_sl_order_id": exchange_sl_order_id,
+            "take_profit_order_status": take_profit_order_status,
+            "take_profit_order_error": take_profit_order_error,
         }
 
     def close_position(
@@ -428,7 +599,7 @@ class GateLiveBroker:
             return {"ok": False, "symbol": symbol, "error": "no_position_found"}
 
         # Place a reduce-only order to close
-        close_size = -target.qty if target.side == "long" else target.qty
+        close_size = -int(target.qty) if target.side == "long" else int(target.qty)
         body = json.dumps({
             "contract": contract,
             "size": close_size,
@@ -511,7 +682,7 @@ class GateLiveBroker:
             net_pnl = gross_pnl - total_fees
 
         # Slippage estimate: small for liquid pairs
-        total_slippage = abs(target.entry_price * target.qty) * 0.00001
+        total_slippage = abs(target.entry_price * target.qty * target.quanto_multiplier) * 0.00001
 
         logger.info("[LIVE] CLOSE %s %s @ market (gross=%.2f, fees=%.4f, net=%.2f, order_id=%s, fill=%.1f)", contract, target.side, gross_pnl, total_fees, net_pnl, order_id, execution_price)
 
@@ -565,9 +736,10 @@ class GateLiveBroker:
         try:
             _gate_private_request(
                 "DELETE",
-                f"{GATE_FUTURES_PRICE_ORDERS_PATH}?contract={contract}&status=open",
+                GATE_FUTURES_PRICE_ORDERS_PATH,
                 api_key=api_key,
                 api_secret=api_secret,
+                query_string=f"contract={contract}&status=open",
             )
             logger.info("[LIVE] Cancelled conditional orders for %s", contract)
             self._sl_order_ids.pop(contract, None)
@@ -676,10 +848,8 @@ class GateLiveBroker:
 
         # Place new SL
         try:
-            sl_size = -target.qty if target.side == "long" else target.qty
-            # Gate rule: 1 = price <= trigger
-            # Long SL (price drops): trigger < mark, rule=1
-            # Short SL (price rises): trigger > mark, rule=1
+            sl_size = -int(target.qty) if target.side == "long" else int(target.qty)
+            sl_rule = _gate_trigger_rule(target.side, "stop_loss")
             sl_trigger = _round_price_tick(new_sl_price, contract)
             sl_body = json.dumps({
                 "contract": contract,
@@ -692,7 +862,7 @@ class GateLiveBroker:
                 },
                 "trigger": {
                     "price": str(sl_trigger),
-                    "rule": 1,
+                    "rule": sl_rule,
                 },
             })
             sl_result = _gate_private_request(
@@ -710,6 +880,72 @@ class GateLiveBroker:
             return {"ok": True, "symbol": symbol, "action": "updated", "old_sl": old_sl, "new_sl": new_sl_price, "order_id": new_id}
         except Exception as exc:
             logger.warning("[LIVE] SL update failed for %s: %s", contract, exc)
+            return {"ok": False, "symbol": symbol, "error": str(exc)}
+
+    def update_take_profit(
+        self,
+        symbol: str,
+        new_tp_price: float,
+        drift_threshold_pct: float = 0.005,
+    ) -> dict[str, Any]:
+        """取消旧交易所止盈单并补挂新止盈单。"""
+        contract = symbol.upper()
+        old_tp = self._tp_prices.get(contract)
+        if old_tp is not None and old_tp > 0:
+            drift = abs(new_tp_price - old_tp) / old_tp
+            if drift < drift_threshold_pct:
+                return {"ok": True, "symbol": symbol, "action": "skip", "reason": "drift_below_threshold"}
+
+        api_key, api_secret = self._creds()
+        target = next((p for p in self._positions if p.symbol == contract), None)
+        if target is None:
+            return {"ok": False, "symbol": symbol, "error": "no_position"}
+
+        tp_id = self._tp_order_ids.get(contract)
+        if tp_id:
+            try:
+                _gate_private_request(
+                    "DELETE",
+                    f"{GATE_FUTURES_PRICE_ORDERS_PATH}/{tp_id}",
+                    api_key=api_key,
+                    api_secret=api_secret,
+                )
+            except Exception:
+                pass
+
+        try:
+            tp_size = -int(target.qty) if target.side == "long" else int(target.qty)
+            tp_rule = _gate_trigger_rule(target.side, "take_profit")
+            tp_trigger = _round_price_tick(new_tp_price, contract)
+            tp_body = json.dumps({
+                "contract": contract,
+                "initial": {
+                    "contract": contract,
+                    "size": tp_size,
+                    "price": "0",
+                    "tif": "ioc",
+                    "reduce_only": True,
+                },
+                "trigger": {
+                    "price": str(tp_trigger),
+                    "rule": tp_rule,
+                },
+            })
+            tp_result = _gate_private_request(
+                "POST",
+                GATE_FUTURES_PRICE_ORDERS_PATH,
+                api_key=api_key,
+                api_secret=api_secret,
+                body=tp_body,
+            )
+            new_id = str(tp_result.get("id", ""))
+            if new_id:
+                self._tp_order_ids[contract] = new_id
+                self._tp_prices[contract] = new_tp_price
+            logger.info("[LIVE] TP updated: %s %.1f -> %.1f id=%s", contract, old_tp or 0, new_tp_price, new_id)
+            return {"ok": True, "symbol": symbol, "action": "updated", "old_tp": old_tp, "new_tp": new_tp_price, "order_id": new_id}
+        except Exception as exc:
+            logger.warning("[LIVE] TP update failed for %s: %s", contract, exc)
             return {"ok": False, "symbol": symbol, "error": str(exc)}
 
     def _fetch_conditional_orders(self) -> list[dict[str, Any]]:
@@ -739,10 +975,10 @@ class GateLiveBroker:
             api_key, api_secret = self._creds()
             raw_account = fetch_futures_account(api_key, api_secret)
             account_info = {
-                "equity": float(raw_account.get("available", 0)) + float(raw_account.get("unrealised_pnl", 0)),
-                "available_balance": float(raw_account.get("available", 0)),
-                "margin_used": float(raw_account.get("position_margin", 0)) + float(raw_account.get("order_margin", 0)),
-                "unrealized_pnl": float(raw_account.get("unrealised_pnl", 0)),
+                "equity": _account_equity(raw_account),
+                "available_balance": _to_float(raw_account.get("available")),
+                "margin_used": _to_float(raw_account.get("position_margin")) + _to_float(raw_account.get("order_margin")),
+                "unrealized_pnl": _to_float(raw_account.get("unrealised_pnl") or raw_account.get("unrealized_pnl")),
                 "realized_pnl": 0,
             }
         except Exception:
@@ -760,9 +996,8 @@ class GateLiveBroker:
                 continue
             rule = int(co.get("trigger", {}).get("rule", 0) or 0)
             entry = sl_tp_by_contract.setdefault(contract, {})
-            # rule=1: price <= trigger (SL for short, TP for short)
-            # rule=2: price >= trigger (SL for long, TP for long)
-            # Distinguish SL vs TP by comparing to mark price
+            # Gate 价格触发规则：1 = >= 触发价，2 = <= 触发价。
+            # 这里展示时通过触发价相对当前标记价的位置区分止损/止盈。
             pos = next((p for p in self._positions if p.symbol == contract), None)
             if pos:
                 if pos.side == "short":
@@ -790,7 +1025,7 @@ class GateLiveBroker:
         positions_out = []
         for p in self._positions:
             raw = raw_by_contract.get(p.symbol, {})
-            notional = p.mark_price * p.qty
+            notional = p.mark_price * p.qty * p.quanto_multiplier
             # Use Gate's actual margin field (cross-margin real amount)
             initial_margin = abs(float(raw.get("margin", 0)))
             if initial_margin <= 0:
@@ -820,12 +1055,17 @@ class GateLiveBroker:
             )
 
             sl_tp = sl_tp_by_contract.get(p.symbol, {})
+            conditional_order_status = {
+                "stop_loss": "placed" if sl_tp.get("sl") else "missing",
+                "take_profit": "placed" if sl_tp.get("tp") else "missing",
+            }
             positions_out.append({
                 "position_id": p.position_id,
                 "symbol": p.symbol,
                 "side": p.side,
                 "leverage": p.leverage,
                 "qty": p.qty,
+                "quanto_multiplier": p.quanto_multiplier,
                 "entry_price": p.entry_price,
                 "mark_price": p.mark_price,
                 "notional": notional,
@@ -838,6 +1078,7 @@ class GateLiveBroker:
                 "liquidation_distance_ratio": liq_distance,
                 "stop_loss_price": sl_tp.get("sl"),
                 "take_profit_price": sl_tp.get("tp"),
+                "conditional_order_status": conditional_order_status,
             })
 
         # Compute account-level aggregates

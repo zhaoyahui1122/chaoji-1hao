@@ -92,7 +92,7 @@ def test_runner_blocks_entry_when_gate_data_unavailable(monkeypatch):
 def test_runner_closes_long_on_candle_low_stop_loss(monkeypatch):
     reset_runner_state()
     allow_runner_guards(monkeypatch)
-    PAPER_BROKER.place_order(
+    open_result = PAPER_BROKER.place_order(
         symbol='BTC_USDT',
         side='long',
         price=81000,
@@ -101,7 +101,9 @@ def test_runner_closes_long_on_candle_low_stop_loss(monkeypatch):
         stop_loss_price=80190,
         source='runner',
         meta={'take_profit_price': 82620},
+        qty=0.01,
     )
+    assert open_result["ok"] is True
 
     def fake_get_ohlcv(symbol, timeframe, source='mock', periods=2000, **kwargs):
         return pd.DataFrame([
@@ -139,7 +141,7 @@ def test_runner_closes_long_on_candle_low_stop_loss(monkeypatch):
 def test_runner_closes_long_on_candle_high_take_profit(monkeypatch):
     reset_runner_state()
     allow_runner_guards(monkeypatch)
-    PAPER_BROKER.place_order(
+    open_result = PAPER_BROKER.place_order(
         symbol='BTC_USDT',
         side='long',
         price=81000,
@@ -148,7 +150,9 @@ def test_runner_closes_long_on_candle_high_take_profit(monkeypatch):
         stop_loss_price=79380,
         source='runner',
         meta={'take_profit_price': 81810},
+        qty=0.01,
     )
+    assert open_result["ok"] is True
 
     def fake_get_ohlcv(symbol, timeframe, source='mock', periods=2000, **kwargs):
         return pd.DataFrame([

@@ -38,8 +38,67 @@ export function formatDateTime(value?: string | null) {
   return formatLocalDateParts(parsed)
 }
 
+export function formatBacktestTradeTime(value?: string | number | null) {
+  if (value == null || value === '') return '-'
+
+  if (typeof value === 'number') {
+    return formatUnixTs(value)
+  }
+
+  const trimmed = String(value).trim()
+  if (!trimmed) return '-'
+
+  const numeric = Number(trimmed)
+  if (Number.isFinite(numeric)) {
+    return formatUnixTs(numeric)
+  }
+
+  return formatDateTime(trimmed)
+}
+
 export function formatMoney(value?: number | null) {
   return `$${Number(value || 0).toFixed(2)}`
+}
+
+export function formatCloseReason(reason?: string | null) {
+  if (!reason) return '-'
+
+  const reasonMap: Record<string, string> = {
+    stop_loss: '止损',
+    take_profit: '止盈',
+    reverse_signal: '信号反转平仓',
+    turtle_exit: '海龟出场',
+    runner_paused: '停止运行后平仓',
+  }
+
+  return reasonMap[reason] || reason
+}
+
+export function formatTradeSide(side?: string | null) {
+  if (!side) return '-'
+
+  const sideMap: Record<string, string> = {
+    long: '做多',
+    short: '做空',
+  }
+
+  return sideMap[side] || side
+}
+
+export function formatTradeStatus(status?: string | null) {
+  if (!status) return '-'
+
+  const statusMap: Record<string, string> = {
+    closed: '已平仓',
+    open: '持仓中',
+    opening: '开仓中',
+    closing: '平仓中',
+    cancelled: '已取消',
+    rejected: '已拒绝',
+    filled: '已成交',
+  }
+
+  return statusMap[status] || status
 }
 
 export function formatPercent(value?: number | null) {
@@ -90,7 +149,7 @@ export function renderRiskExecutionSummary(meta: Record<string, unknown>) {
             : '保证金模式'
 
   rows.push(`开仓模式 ${sizingMode}`)
-  if (meta.close_reason) rows.push(`平仓原因 ${String(meta.close_reason)}`)
+  if (meta.close_reason) rows.push(`平仓原因 ${formatCloseReason(String(meta.close_reason))}`)
   if (meta.allocated_margin !== undefined) rows.push(`原始保证金 ${formatMoney(Number(meta.allocated_margin ?? 0))}`)
   if (meta.effective_allocated_margin !== undefined) rows.push(`生效保证金 ${formatMoney(Number(meta.effective_allocated_margin ?? 0))}`)
   if (meta.risk_based_allocated_margin !== undefined) rows.push(`风险保证金 ${formatMoney(Number(meta.risk_based_allocated_margin ?? 0))}`)
@@ -205,7 +264,7 @@ export function renderRunnerExecutionSummary(result: RunnerInvocationResult | Ru
   if (payload.action) parts.push(`动作 ${String(payload.action)}`)
   if (payload.signal !== undefined && payload.signal !== null) parts.push(`信号 ${String(payload.signal)}`)
   if (payload.price !== undefined && payload.price !== null) parts.push(`价格 ${Number(payload.price).toFixed(2)}`)
-  if (payload.close_reason) parts.push(`平仓原因 ${String(payload.close_reason)}`)
+  if (payload.close_reason) parts.push(`平仓原因 ${formatCloseReason(String(payload.close_reason))}`)
   if (risk?.qty !== undefined) parts.push(`风控数量 ${Number(risk.qty ?? 0).toFixed(6)}`)
   if (risk?.initial_margin !== undefined) parts.push(`初始保证金 ${formatMoney(Number(risk.initial_margin ?? 0))}`)
   if (risk?.max_loss !== undefined) parts.push(`最大亏损 ${formatMoney(Number(risk.max_loss ?? 0))}`)
@@ -219,7 +278,10 @@ export function renderRunnerExecutionSummary(result: RunnerInvocationResult | Ru
 
 export function marketDataStatusColor(meta?: MarketDataMeta | null) {
   if (!meta) return '#6b7280'
-  return meta.fallback_used ? '#d97706' : meta.actual_source === 'gate' ? '#16a34a' : '#2563eb'
+  if (meta.warning) return '#d97706'
+  if (meta.fallback_used) return '#ea580c'
+  if (meta.actual_source === meta.requested_source) return '#16a34a'
+  return '#2563eb'
 }
 
 export function resolveLivePositionPrice(
@@ -357,6 +419,28 @@ export function buildAccountFromLiveStatus(
   }
 
   return { account, positions }
+}
+
+export function deriveTradingWorkspaceSnapshot({
+  dashboard,
+  tradeMode,
+  liveStatus,
+  marketTickers,
+}: {
+  dashboard: Pick<DashboardData, 'account' | 'positions'>
+  tradeMode: 'paper' | 'live'
+  liveStatus?: LiveAccountStatus | null
+  marketTickers?: MarketTickers
+}): { account: DashboardData['account']; positions: DashboardData['positions'] } {
+  // 实盘模式必须以 Gate 实盘状态为准，不能继续展示模拟账户的权益。
+  if (tradeMode === 'live' && liveStatus?.connected && liveStatus.account) {
+    return buildAccountFromLiveStatus(liveStatus, marketTickers)
+  }
+
+  return {
+    account: buildLiveAccountOverview(dashboard.account, dashboard.positions, marketTickers),
+    positions: dashboard.positions,
+  }
 }
 
 export function buildCurvePath(points: EquityPoint[], width = 520, height = 180) {

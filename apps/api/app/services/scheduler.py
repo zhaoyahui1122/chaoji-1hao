@@ -29,9 +29,13 @@ TIMEFRAME_SECONDS = {
 
 
 def _build_runtime_config() -> dict[str, Any]:
-    config = load_strategy_config(StrategyConfig().model_dump())
-    config["data_source"] = "gate"
     state = load_runner_state()
+    last_config = state.get("last_config")
+    if isinstance(last_config, dict) and last_config:
+        config = dict(last_config)
+    else:
+        config = load_strategy_config(StrategyConfig().model_dump())
+    config["data_source"] = "gate"
     selected_symbols = state.get("selected_symbols")
     if selected_symbols:
         config["symbols"] = selected_symbols
@@ -131,6 +135,14 @@ def _refresh_open_position_marks(trade_mode: str = "paper") -> dict[str, float]:
         symbol_positions = [item for item in list(broker.positions) if item.symbol == symbol]
         for live_position in symbol_positions:
             stop_loss_price, take_profit_price = _extract_live_position_targets(live_position, stop_loss_pct, take_profit_pct, broker=broker)
+            if trade_mode == "live":
+                try:
+                    if stop_loss_price and stop_loss_price > 0 and hasattr(broker, "update_stop_loss"):
+                        broker.update_stop_loss(symbol, stop_loss_price)
+                    if take_profit_price and take_profit_price > 0 and hasattr(broker, "update_take_profit"):
+                        broker.update_take_profit(symbol, take_profit_price)
+                except Exception as exc:
+                    logger.warning("[LIVE_MARK] conditional order refresh failed for %s: %s", symbol, exc)
             close_reason, trigger_price = _resolve_live_mark_exit(live_position, mark_price, stop_loss_price, take_profit_price)
             if close_reason is None or trigger_price is None:
                 continue

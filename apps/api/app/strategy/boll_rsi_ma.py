@@ -182,3 +182,26 @@ def generate_signal(
     if short_score >= threshold and short_score > long_score:
         return "short"
     return None
+
+
+def apply_entry_filters(
+    signal: str | None,
+    row,
+    *,
+    trend_filter_enabled: bool = False,
+) -> str | None:
+    """经典策略入场过滤：用于让回测和 Runner 共享同一套额外风控。"""
+    if signal not in ("long", "short"):
+        return signal
+    if not trend_filter_enabled:
+        return signal
+
+    ma_short = row.get("ma_short")
+    ma_long = row.get("ma_long")
+    if pd.isna(ma_short) or pd.isna(ma_long):
+        return None
+    if signal == "long" and ma_short < ma_long:
+        return None
+    if signal == "short" and ma_short > ma_long:
+        return None
+    return signal

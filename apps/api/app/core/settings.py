@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field
+﻿from pydantic import BaseModel, Field
 from typing import Literal
 
 Timeframe = Literal["5m", "15m", "30m", "1h", "4h"]
@@ -16,8 +16,10 @@ class AppSettings(BaseModel):
     max_loss_ratio: float = Field(default=0.02, gt=0, le=0.2)
     margin_limit_ratio: float = Field(default=0.2, gt=0, le=1.0)
     max_consecutive_losses: int = Field(default=3, ge=1, le=20)
-    max_daily_loss_ratio: float = Field(default=0.05, gt=0, le=0.5)
-    max_total_exposure_ratio: float = Field(default=3.0, gt=0, le=20.0)
+    max_daily_loss_ratio: float = Field(default=0.10, gt=0, le=0.5)
+    max_total_exposure_ratio: float = Field(default=2.0, gt=0, le=20.0)
+    max_single_margin_ratio: float = Field(default=0.10, gt=0, le=1.0)
+    max_open_positions: int = Field(default=2, ge=1, le=50)
     turtle_sl_atr_multiplier: float = Field(default=2.0, ge=0.5, le=10.0)
     turtle_tp_atr_multiplier: float = Field(default=3.0, ge=1.0, le=20.0)
     max_drawdown_halt_ratio: float = Field(default=0.15, gt=0, le=0.5)

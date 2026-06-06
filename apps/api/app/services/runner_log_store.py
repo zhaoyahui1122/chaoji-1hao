@@ -7,7 +7,7 @@ from typing import Any
 
 from app.services.db import load_kv, save_kv
 
-_STATE_DIR = Path(os.environ.get("STATE_DIR", str(Path(__file__).resolve().parents[2] / "state")))
+_STATE_DIR = Path(os.environ.get("STATE_DIR", str(Path(__file__).resolve().parents[4] / "state")))
 _STATE_DIR.mkdir(parents=True, exist_ok=True)
 LOG_PATH = _STATE_DIR / "runner_logs.json"
 
@@ -21,14 +21,14 @@ def _load_json_fallback() -> list[dict[str, Any]]:
         return []
 
 
-def load_logs() -> list[dict[str, Any]]:
+def load_logs(limit: int | None = None) -> list[dict[str, Any]]:
     data = load_kv("runner", "logs", None)
     if data is not None:
-        return data
+        return data[-limit:] if limit and limit > 0 else data
 
     fallback = _load_json_fallback()
     save_kv("runner", "logs", fallback)
-    return fallback
+    return fallback[-limit:] if limit and limit > 0 else fallback
 
 
 def append_log(entry: dict[str, Any], limit: int = 200) -> None:
@@ -37,3 +37,8 @@ def append_log(entry: dict[str, Any], limit: int = 200) -> None:
     logs = logs[-limit:]
     save_kv("runner", "logs", logs)
     LOG_PATH.write_text(json.dumps(logs, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def clear_logs() -> None:
+    save_kv("runner", "logs", [])
+    LOG_PATH.write_text("[]", encoding="utf-8")

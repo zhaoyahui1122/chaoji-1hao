@@ -12,7 +12,13 @@ import {
 
 const POLL_INTERVAL_MS = 10_000
 
-export default function LiveAccountShell({ inline = false }: { inline?: boolean }) {
+export default function LiveAccountShell({
+  inline = false,
+  onStatusChange,
+}: {
+  inline?: boolean
+  onStatusChange?: (status: LiveAccountStatus) => void
+}) {
   const [status, setStatus] = useState<LiveAccountStatus | null>(null)
   const [loading, setLoading] = useState(true)
   const [connecting, setConnecting] = useState(false)
@@ -36,13 +42,14 @@ export default function LiveAccountShell({ inline = false }: { inline?: boolean 
     try {
       const data = await getLiveAccountStatus()
       setStatus(data)
+      onStatusChange?.(data)
       setError(null)
     } catch {
       setError('无法加载实盘账户状态')
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [onStatusChange])
 
   useEffect(() => {
     load()
@@ -56,11 +63,12 @@ export default function LiveAccountShell({ inline = false }: { inline?: boolean 
         try {
           const data = await getLiveAccountStatus()
           setStatus(data)
+          onStatusChange?.(data)
         } catch { /* ignore poll errors */ }
       }, POLL_INTERVAL_MS)
     }
     return clearTimer
-  }, [status?.connected, clearTimer])
+  }, [status?.connected, clearTimer, onStatusChange])
 
   const handleConnect = async () => {
     if (!apiKey.trim() || !apiSecret.trim()) return
@@ -69,6 +77,7 @@ export default function LiveAccountShell({ inline = false }: { inline?: boolean 
     try {
       const data = await connectLiveAccount(apiKey.trim(), apiSecret.trim())
       setStatus(data)
+      onStatusChange?.(data)
       setApiKey('')
       setApiSecret('')
     } catch (err: any) {
@@ -83,6 +92,7 @@ export default function LiveAccountShell({ inline = false }: { inline?: boolean 
     try {
       const data = await refreshLiveAccount()
       setStatus(data)
+      onStatusChange?.(data)
     } catch (err: any) {
       setError(err.message || '刷新失败')
     } finally {
@@ -97,6 +107,7 @@ export default function LiveAccountShell({ inline = false }: { inline?: boolean 
       await closeLivePosition(symbol)
       const data = await refreshLiveAccount()
       setStatus(data)
+      onStatusChange?.(data)
     } catch (err: any) {
       setError(err.message || '平仓失败')
     } finally {
@@ -389,7 +400,7 @@ const panelStyle: React.CSSProperties = {
   borderRadius: 24,
   border: '1px solid rgba(51,65,85,0.72)',
   background: 'linear-gradient(180deg, rgba(15,23,42,0.88) 0%, rgba(2,6,23,0.92) 100%)',
-  boxShadow: '0 24px 80px rgba(2,6,23,0.45)',
+  boxShadow: '0 16px 32px rgba(0,0,0,0.18)',
   padding: '32px',
   display: 'grid',
   gap: 24,
@@ -405,7 +416,7 @@ const eyebrowStyle: React.CSSProperties = {
   fontSize: 12,
   letterSpacing: '0.18em',
   textTransform: 'uppercase',
-  color: '#38bdf8',
+  color: '#d1d5db',
   marginBottom: 12,
 }
 
@@ -441,9 +452,9 @@ const errorBannerStyle: React.CSSProperties = {
 
 const errorDismissStyle: React.CSSProperties = {
   background: 'transparent',
-  border: '1px solid rgba(248,113,113,0.35)',
+  border: '1px solid rgba(255,255,255,0.08)',
   borderRadius: 8,
-  color: '#fca5a5',
+  color: '#e5e7eb',
   padding: '5px 12px',
   fontSize: 12,
   fontWeight: 600,
@@ -477,8 +488,8 @@ const labelSpanStyle: React.CSSProperties = {
 const inputStyle: React.CSSProperties = {
   padding: '11px 12px',
   borderRadius: 12,
-  border: '1px solid rgba(71,85,105,0.7)',
-  background: 'rgba(2,6,23,0.88)',
+  border: '1px solid rgba(255,255,255,0.08)',
+  background: 'rgba(9,11,15,0.92)',
   color: '#f8fafc',
   fontSize: 14,
   outline: 'none',
@@ -489,19 +500,19 @@ const primaryButtonStyle: React.CSSProperties = {
   padding: '13px 16px',
   borderRadius: 14,
   border: 0,
-  background: 'linear-gradient(135deg, #111827 0%, #1d4ed8 100%)',
+  background: 'linear-gradient(135deg, #20232a 0%, #2b3038 100%)',
   color: '#fff',
   fontWeight: 800,
   fontSize: 15,
   cursor: 'pointer',
-  boxShadow: '0 14px 32px rgba(29,78,216,0.18)',
+  boxShadow: '0 8px 18px rgba(0,0,0,0.14)',
 }
 
 const secondaryButtonStyle: React.CSSProperties = {
   padding: '11px 20px',
   borderRadius: 14,
-  border: '1px solid rgba(71,85,105,0.6)',
-  background: 'rgba(15,23,42,0.6)',
+  border: '1px solid rgba(255,255,255,0.08)',
+  background: 'rgba(255,255,255,0.04)',
   color: '#e2e8f0',
   fontWeight: 700,
   fontSize: 14,
@@ -524,8 +535,8 @@ const miniStatCardStyle: React.CSSProperties = {
   gap: 6,
   padding: '16px 18px',
   borderRadius: 20,
-  background: 'linear-gradient(180deg, rgba(15,23,42,0.95) 0%, rgba(30,41,59,0.92) 100%)',
-  border: '1px solid rgba(71,85,105,0.55)',
+  background: 'linear-gradient(180deg, rgba(15,17,22,0.95) 0%, rgba(22,25,30,0.92) 100%)',
+  border: '1px solid rgba(255,255,255,0.08)',
 }
 
 const miniStatLabelStyle: React.CSSProperties = {
@@ -568,7 +579,7 @@ const positionCountStyle: React.CSSProperties = {
 const tableWrapperStyle: React.CSSProperties = {
   overflowX: 'auto',
   borderRadius: 16,
-  border: '1px solid rgba(51,65,85,0.5)',
+  border: '1px solid rgba(255,255,255,0.08)',
 }
 
 const tableStyle: React.CSSProperties = {
@@ -614,7 +625,7 @@ const closeButtonStyle: React.CSSProperties = {
   padding: '6px 14px',
   borderRadius: 10,
   border: 0,
-  background: '#dc2626',
+  background: '#2b3038',
   color: '#fff',
   fontWeight: 700,
   fontSize: 12,

@@ -8,7 +8,7 @@ from typing import Any
 
 from app.services.db import get_conn, load_kv, save_kv, init_db
 
-_STATE_DIR = Path(os.environ.get("STATE_DIR", str(Path(__file__).resolve().parents[2] / "state")))
+_STATE_DIR = Path(os.environ.get("STATE_DIR", str(Path(__file__).resolve().parents[4] / "state")))
 _STATE_DIR.mkdir(parents=True, exist_ok=True)
 STRATEGY_STATE_PATH = _STATE_DIR / "strategy_config.json"
 STRATEGY_SLOTS_PATH = _STATE_DIR / "strategy_slots.json"
@@ -89,6 +89,8 @@ DEFAULT_SLOTS = [
             "kdj_oversold": 20,
             "min_signal_score": 4,
             "churn_guard_enabled": True,
+            "classic_trend_filter_enabled": True,
+            "classic_cooldown_bars": 2,
             "turtle_entry_period": 20,
             "turtle_exit_period": 10,
             "turtle_atr_period": 14,
@@ -138,6 +140,8 @@ DEFAULT_SLOTS = [
             "kdj_oversold": 20,
             "min_signal_score": 3,
             "churn_guard_enabled": False,
+            "classic_trend_filter_enabled": False,
+            "classic_cooldown_bars": 0,
             "turtle_entry_period": 20,
             "turtle_exit_period": 10,
             "turtle_atr_period": 14,
@@ -248,6 +252,8 @@ def add_strategy_slot(name: str | None = None) -> dict[str, Any]:
             "ma_short": 9,
             "ma_long": 21,
             "churn_guard_enabled": False,
+            "classic_trend_filter_enabled": False,
+            "classic_cooldown_bars": 0,
             "turtle_entry_period": 20,
             "turtle_exit_period": 10,
             "turtle_atr_period": 14,

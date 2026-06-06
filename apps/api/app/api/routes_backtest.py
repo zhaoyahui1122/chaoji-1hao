@@ -1,4 +1,4 @@
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 from typing import Any, Literal
@@ -7,7 +7,7 @@ from app.backtest.engine import SimpleBacktester
 from app.core.rate_limit import limiter
 from app.core.settings import SETTINGS
 from app.services.market_data import get_ohlcv, timeframe_to_minutes, MarketDataUnavailableError
-from app.services.risk import leverage_risk_check
+from app.services.risk import leverage_risk_check, validate_stop_loss_against_liquidation
 
 router = APIRouter()
 
@@ -31,6 +31,8 @@ class BacktestRequest(BaseModel):
     entry_price: float = Field(default=64000, gt=0)
     stop_loss_price: float = Field(default=62720, gt=0)
     backtest_days: int = Field(default=7, ge=1, le=365)
+    start_date: date | None = None
+    end_date: date | None = None
 
     # Classic strategy params
     use_boll: bool = True
@@ -53,6 +55,8 @@ class BacktestRequest(BaseModel):
     kdj_overbought: float = Field(default=80, ge=50, le=100)
     kdj_oversold: float = Field(default=20, ge=0, le=50)
     min_signal_score: int = Field(default=3, ge=1, le=10)
+    classic_trend_filter_enabled: bool = False
+    classic_cooldown_bars: int = Field(default=0, ge=0, le=100)
 
     # Turtle strategy params
     turtle_entry_period: int = Field(default=20, ge=5, le=100)
@@ -107,9 +111,30 @@ class BacktestResponse(BaseModel):
     input: dict[str, Any]
     market_data: dict[str, Any]
     risk: dict[str, Any]
+    assumptions: dict[str, Any]
     summary: BacktestSummary
     equity_curve: list[dict[str, Any]]
     trades: list[dict[str, Any]]
+
+
+def _resolve_backtest_window(payload: BacktestRequest) -> tuple[datetime, datetime, int]:
+    if payload.start_date or payload.end_date:
+        if not payload.start_date or not payload.end_date:
+            raise HTTPException(status_code=422, detail='start_date and end_date must both be provided')
+        if payload.start_date > payload.end_date:
+            raise HTTPException(status_code=422, detail='start_date cannot be later than end_date')
+
+        window_days = (payload.end_date - payload.start_date).days + 1
+        if window_days > 365:
+            raise HTTPException(status_code=422, detail='Date range cannot exceed 365 days')
+
+        start_time = datetime.combine(payload.start_date, time.min, tzinfo=UTC)
+        end_time = datetime.combine(payload.end_date + timedelta(days=1), time.min, tzinfo=UTC)
+        return start_time, end_time, window_days
+
+    end_time = datetime.now(UTC)
+    start_time = end_time - timedelta(days=payload.backtest_days)
+    return start_time, end_time, payload.backtest_days
 
 
 @router.post("", response_model=BacktestResponse)
@@ -127,9 +152,8 @@ def run_backtest(request: Request, payload: BacktestRequest):
     )
 
     candles_per_day = max(1, int((24 * 60) / timeframe_to_minutes(payload.timeframe)))
-    periods = max(payload.backtest_days * candles_per_day, 50)
-    end_time = datetime.now(UTC)
-    start_time = end_time - timedelta(days=payload.backtest_days)
+    start_time, end_time, window_days = _resolve_backtest_window(payload)
+    periods = max(window_days * candles_per_day, 50)
 
     try:
         data, market_data = get_ohlcv(
@@ -147,8 +171,8 @@ def run_backtest(request: Request, payload: BacktestRequest):
     df_1h = None
     if payload.strategy_type == "ict":
         # ICT 需要 4h + 1h + 15m 三个周期
-        periods_1h = max(payload.backtest_days * 24, 50)
-        periods_4h = max(payload.backtest_days * 6, 20)
+        periods_1h = max(window_days * 24, 50)
+        periods_4h = max(window_days * 6, 20)
         try:
             df_1h, _ = get_ohlcv(payload.symbol, "1h", source=payload.data_source, periods=periods_1h, start_time=start_time, end_time=end_time)
             df_4h, _ = get_ohlcv(payload.symbol, "4h", source=payload.data_source, periods=periods_4h, start_time=start_time, end_time=end_time)
@@ -157,12 +181,25 @@ def run_backtest(request: Request, payload: BacktestRequest):
 
     engine = SimpleBacktester(initial_balance=payload.initial_balance)
     result = engine.run(data, payload.model_dump(), df_4h=df_4h, df_1h=df_1h)
+    liquidation_guard = validate_stop_loss_against_liquidation(payload.leverage, payload.stop_loss_pct)
+    assumptions = {
+        "data_source": payload.data_source,
+        "symbol": payload.symbol,
+        "timeframe": payload.timeframe,
+        "leverage": payload.leverage,
+        "fee_rate": payload.fee_rate,
+        "slippage_rate": payload.slippage_rate,
+        "stop_take_profit_trigger": "high_low_intrabar",
+        "liquidation_check": liquidation_guard,
+        "contract_unit": "backtest_uses_base_qty; live_gate_uses_contract_size_with_quanto_multiplier",
+    }
 
     return {
         "ok": True,
         "input": payload.model_dump(),
         "market_data": market_data,
         "risk": risk,
+        "assumptions": assumptions,
         "summary": result.summary,
         "equity_curve": result.equity_curve,
         "trades": result.trades,

@@ -14,12 +14,12 @@ import {
 type Tone = 'cyan' | 'blue' | 'green' | 'violet' | 'slate' | 'amber'
 
 const toneMap: Record<Tone, { border: string; glow: string; value: string }> = {
-  cyan: { border: 'rgba(34,211,238,0.28)', glow: 'rgba(8,145,178,0.18)', value: '#a5f3fc' },
-  blue: { border: 'rgba(59,130,246,0.24)', glow: 'rgba(37,99,235,0.16)', value: '#bfdbfe' },
-  green: { border: 'rgba(16,185,129,0.24)', glow: 'rgba(5,150,105,0.16)', value: '#a7f3d0' },
-  violet: { border: 'rgba(168,85,247,0.24)', glow: 'rgba(126,34,206,0.16)', value: '#e9d5ff' },
-  slate: { border: 'rgba(148,163,184,0.2)', glow: 'rgba(51,65,85,0.18)', value: '#e2e8f0' },
-  amber: { border: 'rgba(245,158,11,0.28)', glow: 'rgba(180,83,9,0.18)', value: '#fcd34d' },
+  cyan: { border: 'rgba(255,255,255,0.08)', glow: 'rgba(0,0,0,0.18)', value: '#f3f4f6' },
+  blue: { border: 'rgba(255,255,255,0.08)', glow: 'rgba(0,0,0,0.18)', value: '#f3f4f6' },
+  green: { border: 'rgba(34,197,94,0.2)', glow: 'rgba(0,0,0,0.18)', value: '#4ade80' },
+  violet: { border: 'rgba(255,255,255,0.08)', glow: 'rgba(0,0,0,0.18)', value: '#f3f4f6' },
+  slate: { border: 'rgba(255,255,255,0.08)', glow: 'rgba(0,0,0,0.18)', value: '#e5e7eb' },
+  amber: { border: 'rgba(255,255,255,0.08)', glow: 'rgba(0,0,0,0.18)', value: '#f3f4f6' },
 }
 
 export function MetricCard({ label, value, tone }: { label: string; value: string; tone: Tone }) {
@@ -35,7 +35,10 @@ export function MetricCard({ label, value, tone }: { label: string; value: strin
 export function HeroMiniStat({ label, value }: { label: string; value: string }) {
   return (
     <div style={heroMiniStatStyle}>
-      <div style={heroMiniLabelStyle}>{label}</div>
+      <div style={{ ...heroMiniLabelStyle, display: 'flex', alignItems: 'center', gap: 8 }}>
+        <span style={{ width: 8, height: 8, borderRadius: 999, background: '#6b7280' }} />
+        {label}
+      </div>
       <div style={heroMiniValueStyle}>{value}</div>
     </div>
   )
@@ -43,7 +46,7 @@ export function HeroMiniStat({ label, value }: { label: string; value: string })
 
 export function SectionHeader({ title, hint }: { title: string; hint: string }) {
   return (
-    <div style={{ marginBottom: 14 }}>
+    <div style={{ marginBottom: 16 }}>
       <div style={eyebrowStyle}>Workspace Panel</div>
       <h3 style={sectionTitleStyle}>{title}</h3>
       <p style={sectionHintStyle}>{hint}</p>

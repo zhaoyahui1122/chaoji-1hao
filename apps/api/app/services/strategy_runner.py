@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime
+from datetime import datetime, timedelta
 import json
 from typing import Any
 
@@ -9,16 +9,50 @@ from app.core.log_config import get_logger
 from app.core.state import PAPER_BROKER, get_broker
 from app.services.market_data import get_ohlcv, MarketDataUnavailableError
 from app.services.notify_service import notify_guard_halt, notify_error, notify_open, notify_close
-from app.services.runner_log_store import append_log, load_logs
-from app.services.runner_risk_controls import evaluate_runner_guards
-from app.services.runner_state_store import load_runner_state, save_runner_state
-from app.services.risk import build_risk_sized_order, calc_stop_loss_price, calc_take_profit_price
+from app.services.runner_log_store import append_log, clear_logs, load_logs
+from app.services.runner_risk_controls import apply_entry_risk_limits, evaluate_runner_guards
+from app.services.runner_state_store import DEFAULT_RUNNER_STATE, load_runner_state, save_runner_state
+from app.services.risk import (
+    build_risk_sized_order,
+    calc_stop_loss_price,
+    calc_take_profit_price,
+    validate_stop_loss_against_liquidation,
+)
 from app.services.strategy_store import load_strategy_config
-from app.strategy.boll_rsi_ma import compute_indicators as classic_compute_indicators, generate_signal as classic_generate_signal
+from app.strategy.boll_rsi_ma import (
+    apply_entry_filters as classic_apply_entry_filters,
+    compute_indicators as classic_compute_indicators,
+    generate_signal as classic_generate_signal,
+)
 from app.strategy.turtle import prepare_signals as turtle_prepare_signals
 from app.strategy.ict import generate_signal as ict_generate_signal
 
 logger = get_logger(__name__)
+
+TIMEFRAME_SECONDS = {
+    "5m": 300,
+    "15m": 900,
+    "30m": 1800,
+    "1h": 3600,
+    "4h": 14400,
+}
+
+
+def _apply_direction_mode(signal: str | None, direction_mode: str) -> tuple[str | None, dict[str, Any] | None]:
+    if signal not in ('long', 'short'):
+        return signal, None
+    if direction_mode == 'long_only' and signal == 'short':
+        return None, {'blocked_signal': signal, 'direction_mode': direction_mode}
+    if direction_mode == 'short_only' and signal == 'long':
+        return None, {'blocked_signal': signal, 'direction_mode': direction_mode}
+    return signal, None
+
+
+def _build_liquidation_guard_message(leverage: int, stop_loss_pct: float, liquidation_buffer_pct: float) -> str:
+    return (
+        f"当前 {leverage}x 杠杆下，估算强平缓冲仅 {liquidation_buffer_pct * 100:.2f}%，"
+        f"但止损为 {stop_loss_pct * 100:.2f}%，会先强平后止损，请降低杠杆或缩小止损。"
+    )
 
 
 def _run_classic_signal(config: dict[str, Any], df, last_row) -> tuple[str | None, dict[str, Any] | None]:
@@ -49,6 +83,11 @@ def _run_classic_signal(config: dict[str, Any], df, last_row) -> tuple[str | Non
         kdj_overbought=float(config.get("kdj_overbought", 80)),
         kdj_oversold=float(config.get("kdj_oversold", 20)),
         min_signal_score=int(config.get("min_signal_score", 3)),
+    )
+    signal = classic_apply_entry_filters(
+        signal,
+        last,
+        trend_filter_enabled=bool(config.get("classic_trend_filter_enabled", False)),
     )
     return signal, None
 
@@ -87,6 +126,44 @@ def _should_block_reverse_signal(config: dict[str, Any], existing, signal: str |
     stop_loss_pct = max(float(config.get("stop_loss_pct", 0.02) or 0.02), 0.0)
     threshold = max(stop_loss_pct * 0.5, 0.002)
     return move_ratio < threshold
+
+
+def _classic_entry_cooldown_guard(config: dict[str, Any], symbol: str, timeframe: str) -> dict[str, Any] | None:
+    cooldown_bars = int(config.get("classic_cooldown_bars", 0) or 0)
+    if cooldown_bars <= 0:
+        return None
+
+    cooldown_seconds = cooldown_bars * TIMEFRAME_SECONDS.get(str(timeframe), 900)
+    if cooldown_seconds <= 0:
+        return None
+
+    now = datetime.utcnow()
+    # 日志按时间追加保存，冷却判断必须以最近一次平仓为准。
+    for entry in reversed(load_logs(limit=100)):
+        result = entry.get("result")
+        if not isinstance(result, dict):
+            continue
+        if result.get("symbol") != symbol or result.get("action") != "close":
+            continue
+        ts_raw = entry.get("ts") or entry.get("timestamp")
+        if not ts_raw:
+            continue
+        try:
+            closed_at = datetime.fromisoformat(str(ts_raw).replace("Z", "+00:00")).replace(tzinfo=None)
+        except (TypeError, ValueError):
+            continue
+        elapsed = now - closed_at
+        remaining = timedelta(seconds=cooldown_seconds) - elapsed
+        if remaining.total_seconds() > 0:
+            return {
+                "blocked": True,
+                "reason": "classic_entry_cooldown",
+                "cooldown_bars": cooldown_bars,
+                "remaining_seconds": round(remaining.total_seconds(), 3),
+                "last_close_at": str(ts_raw),
+            }
+        return None
+    return None
 
 
 
@@ -191,7 +268,7 @@ def _save_and_return(config: dict[str, Any], payload: dict[str, Any]) -> dict[st
     state = load_runner_state()
     save_runner_state({
         **state,
-        "is_running": state.get("enabled", False),  # 如果 enabled 则保持 is_running
+        "is_running": state.get("enabled", False),
         "last_run_at": datetime.utcnow().isoformat(),
         "last_result": payload,
         "last_error": None,
@@ -249,7 +326,7 @@ def run_strategy_cycle(config: dict[str, Any]) -> dict[str, Any]:
             "manual_resume_required": True,
             # 保持 enabled，让前端知道机器人是"被暂停"而不是"未启动"
             "is_running": False,
-            "enabled": True,
+            "enabled": state.get("enabled", False),
         })
         return payload
 
@@ -265,6 +342,7 @@ def run_strategy_cycle(config: dict[str, Any]) -> dict[str, Any]:
     fee_rate = float(config.get("fee_rate", 0.00015))
     slippage_rate = float(config.get("slippage_rate", 0.0001))
     strategy_type = config.get("strategy_type", "classic")
+    direction_mode = str(config.get("direction_mode", "auto"))
     broker = get_broker(trade_mode)
 
     # Sync live positions from exchange before each cycle (handles restart recovery)
@@ -278,7 +356,7 @@ def run_strategy_cycle(config: dict[str, Any]) -> dict[str, Any]:
     save_runner_state({
         **state,
         "is_running": True,
-        "enabled": True,  # run-once 时自动启用 runner
+        "enabled": state.get("enabled", False),  # run-once ??????????? runner
         "last_error": None,
         "last_config": config,
         "halt_reason": None,
@@ -334,6 +412,7 @@ def run_strategy_cycle(config: dict[str, Any]) -> dict[str, Any]:
                 fee_rate=fee_rate,
                 slippage_rate=slippage_rate,
                 strategy_type=strategy_type,
+                direction_mode=direction_mode,
                 broker=broker,
                 pre_fetched_data=pre_fetched,
             )
@@ -385,11 +464,13 @@ def _run_single_symbol_cycle(
     fee_rate: float,
     slippage_rate: float,
     strategy_type: str,
+    direction_mode: str = 'auto',
     broker: Any = None,
     pre_fetched_data: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if broker is None:
         broker = PAPER_BROKER
+    trade_mode = config.get("trade_mode", "paper")
 
     # ---- ICT 策略：多 timeframe 数据拉取 ----
     if strategy_type == "ict":
@@ -470,6 +551,21 @@ def _run_single_symbol_cycle(
         else:
             signal, extra_meta = _run_classic_signal(config, df, last_row)
 
+    original_signal = signal
+    signal, direction_guard = _apply_direction_mode(signal, direction_mode)
+    if direction_guard is not None:
+        return {
+            'ok': True,
+            'symbol': symbol,
+            'action': 'skip_direction_mode',
+            'reason': 'signal_blocked_by_direction_mode',
+            'signal': original_signal,
+            'price': price,
+            'guard': guard,
+            'market_data': market_meta,
+            'direction_guard': direction_guard,
+        }
+
     existing = next((p for p in broker.positions if p.symbol == symbol), None)
 
     if existing is not None and signal in ("long", "short") and existing.side != signal:
@@ -515,6 +611,45 @@ def _run_single_symbol_cycle(
             }
 
     if signal in ("long", "short") and existing is None:
+        if strategy_type == "classic":
+            cooldown_guard = _classic_entry_cooldown_guard(config, symbol, timeframe)
+            if cooldown_guard:
+                return {
+                    "ok": True,
+                    "symbol": symbol,
+                    "action": "skip_entry_cooldown",
+                    "reason": "classic_entry_cooldown",
+                    "signal": signal,
+                    "price": price,
+                    "cooldown_guard": cooldown_guard,
+                    "guard": guard,
+                    "market_data": market_meta,
+                }
+
+        liquidation_guard = validate_stop_loss_against_liquidation(leverage, stop_loss_pct)
+        if not liquidation_guard["ok"]:
+            detail = _build_liquidation_guard_message(
+                leverage=leverage,
+                stop_loss_pct=stop_loss_pct,
+                liquidation_buffer_pct=liquidation_guard["liquidation_buffer_pct"],
+            )
+            logger.warning("[%s] entry rejected by liquidation guard: %s", symbol, detail)
+            return {
+                "ok": True,
+                "symbol": symbol,
+                "action": "rejected",
+                "signal": signal,
+                "price": price,
+                "result": {
+                    "ok": False,
+                    "reason": "stop_loss_after_liquidation",
+                    "detail": detail,
+                    "risk": liquidation_guard,
+                },
+                "guard": guard,
+                "market_data": market_meta,
+            }
+
         if strategy_type == "turtle" and extra_meta and extra_meta.get("atr", 0) > 0:
             atr = extra_meta["atr"]
             sl_mult = float(config.get("turtle_sl_atr_multiplier", 2.0))
@@ -553,6 +688,32 @@ def _run_single_symbol_cycle(
             )
 
         effective_allocated_margin = sizing["effective_allocated_margin"]
+        entry_limit = apply_entry_risk_limits(
+            broker=broker,
+            symbol=symbol,
+            leverage=leverage,
+            requested_margin=effective_allocated_margin,
+            entry_price=price,
+        )
+        if not entry_limit["allowed"]:
+            logger.warning("[%s] entry rejected by entry risk limits: %s", symbol, entry_limit.get("reason"))
+            return {
+                "ok": True,
+                "symbol": symbol,
+                "action": "rejected",
+                "signal": signal,
+                "price": price,
+                "result": {
+                    "ok": False,
+                    "reason": entry_limit.get("reason", "entry_risk_limit_rejected"),
+                    "risk": entry_limit,
+                },
+                "guard": guard,
+                "market_data": market_meta,
+            }
+        effective_allocated_margin = float(entry_limit["adjusted_margin"])
+        if price > 0 and leverage > 0:
+            sizing["qty"] = (effective_allocated_margin * leverage) / price
         explicit_qty = sizing["qty"]
         result = broker.place_order(
             symbol=symbol, side=signal, price=price, leverage=leverage,
@@ -563,6 +724,7 @@ def _run_single_symbol_cycle(
                 "timeframe": timeframe, "data_source": market_meta.get("actual_source"),
                 "allocated_margin": allocated_margin,
                 "effective_allocated_margin": effective_allocated_margin,
+                "entry_risk_limits": entry_limit,
                 "risk_per_trade_pct": risk_per_trade_pct, "explicit_qty": explicit_qty,
                 "stop_loss_pct": stop_loss_pct, "stop_loss_price": sizing["stop_loss_price"],
                 "take_profit_pct": take_profit_pct, "take_profit_price": sizing["take_profit_price"],
@@ -574,6 +736,17 @@ def _run_single_symbol_cycle(
         )
         action = "open" if result.get("ok") else "rejected"
         logger.info("[%s] %s %s @ %s (margin=%.0f, sl=%.1f)", symbol, action, signal, price, effective_allocated_margin, sizing["stop_loss_price"])
+        if trade_mode == "live" and str(result.get("error", "")).startswith("stop_loss_order_failed"):
+            halt_reason = "实盘止损挂单失败，系统已尝试保护性平仓，请人工确认后再恢复机器人"
+            save_runner_state({
+                **load_runner_state(),
+                "is_running": False,
+                "enabled": True,
+                "manual_resume_required": True,
+                "halt_reason": halt_reason,
+                "last_error": result.get("error"),
+            })
+            notify_guard_halt(halt_reason, guard.get("consecutive_loss_count", 0))
         if config.get("trade_mode") == "live" and result.get("ok"):
             exec_price = result.get("execution_price_actual", price)
             notify_open(symbol, signal, exec_price, explicit_qty, leverage)
@@ -701,3 +874,13 @@ def resume_runner() -> dict[str, Any]:
     state["halt_reason"] = None
     state["last_error"] = None
     return save_runner_state(state)
+
+
+def reset_runner_runtime_state(*, clear_history_logs: bool = True, trade_mode: str = "paper") -> dict[str, Any]:
+    next_state = {
+        **DEFAULT_RUNNER_STATE,
+        "trade_mode": trade_mode,
+    }
+    if clear_history_logs:
+        clear_logs()
+    return save_runner_state(next_state)

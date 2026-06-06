@@ -4,7 +4,7 @@ import type { Dispatch, SetStateAction } from 'react'
 
 import type { DashboardData, EquityPoint, HistoryFilters, HistoryStats, MarketTickers } from './dashboard-types'
 import { cardStyle, chipStyle, labelStyle, sectionHintStyle, sectionTitleStyle } from './dashboard-types'
-import { buildCurvePath, formatMoney, readPositionTargetPrice, renderCostSummaryRows, resolveLivePositionPrice } from './dashboard-utils'
+import { buildCurvePath, formatDateTime, formatMoney, readPositionTargetPrice, renderCostSummaryRows, resolveLivePositionPrice } from './dashboard-utils'
 
 function derivePositionTarget(position: DashboardData['positions'][number], metaKey: 'stop_loss_price' | 'take_profit_price', fallbackPct: number) {
   const persistedTarget = readPositionTargetPrice(position.open_order_meta_json, metaKey)
@@ -75,6 +75,24 @@ const inputStyle: React.CSSProperties = {
   color: '#0f172a',
 }
 
+function buildCurvePoints(equityCurve: EquityPoint[]) {
+  if (equityCurve.length === 0) return []
+
+  const width = 520
+  const height = 180
+  const padding = 12
+  const values = equityCurve.map((item) => item.equity)
+  const min = Math.min(...values)
+  const max = Math.max(...values)
+  const range = max - min || 1
+
+  return equityCurve.map((item, index) => {
+    const x = padding + (index / Math.max(equityCurve.length - 1, 1)) * (width - padding * 2)
+    const y = height - padding - ((item.equity - min) / range) * (height - padding * 2)
+    return { x, y, item, index }
+  })
+}
+
 function panelHeader(title: string, hint: string, right?: React.ReactNode) {
   return (
     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, marginBottom: 16, flexWrap: 'wrap' }}>
@@ -124,6 +142,7 @@ export function PositionsOverviewCard({
 }) {
   const positions = positionsOverride ?? dashboard.positions
   const runnerStatusSymbols = readRunnerStatusSymbols(dashboard.runner)
+  const isLiveMode = dashboard.trade_mode === 'live'
 
   return (
     <div style={cardStyle}>
@@ -147,7 +166,7 @@ export function PositionsOverviewCard({
       <div style={{ display: 'grid', gap: 12 }}>
         {positions.length === 0 ? (
           <p style={{ color: '#6b7280' }}>暂无持仓</p>
-        ) : positions.map((position) => {
+        ) : positions.map((position, index) => {
           const livePrice = resolveLivePositionPrice(position, marketTickers)
           const unrealizedPnl = position.unrealized_pnl ?? (position.side === 'long'
             ? (livePrice - position.entry_price) * position.qty
@@ -159,6 +178,7 @@ export function PositionsOverviewCard({
             : 0
           const stopLossPrice = position.stop_loss_price ?? derivePositionTarget(position, 'stop_loss_price', riskConfig.stopLossPct)
           const takeProfitPrice = position.take_profit_price ?? derivePositionTarget(position, 'take_profit_price', riskConfig.takeProfitPct)
+          const hasPersistedTargets = Number(position.stop_loss_price) > 0 && Number(position.take_profit_price) > 0
           const slDistancePct = position.entry_price > 0
             ? (position.side === 'long' ? (livePrice - stopLossPrice) : (stopLossPrice - livePrice)) / position.entry_price
             : 0
@@ -166,9 +186,13 @@ export function PositionsOverviewCard({
           const liqDistPct = liqPrice > 0 && livePrice > 0
             ? Math.abs(livePrice - liqPrice) / livePrice
             : 0
+          const liquidationLabel = isLiveMode ? '交易所强平价' : '模拟强平价（估算）'
+          const liquidationDistanceLabel = isLiveMode ? '距交易所强平' : '距模拟强平'
+          const conditionalStatus = position.conditional_order_status
+          const hasMissingConditionalOrder = isLiveMode && conditionalStatus && (conditionalStatus.stop_loss === 'missing' || conditionalStatus.take_profit === 'missing')
 
           return (
-            <div key={`${position.symbol}-${position.side}`} style={panelStyle}>
+            <div key={position.position_id || `${position.symbol}-${position.side}-${index}`} style={panelStyle}>
               <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, marginBottom: 12, flexWrap: 'wrap', alignItems: 'center' }}>
                 <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
                   <strong style={{ fontSize: 18, color: '#0f172a' }}>{position.symbol}</strong>
@@ -186,15 +210,25 @@ export function PositionsOverviewCard({
                 <MetricTile label="开仓价" value={toPrice(position.entry_price)} />
                 <MetricTile label="当前价格" value={toPrice(livePrice)} />
                 <MetricTile label="数量" value={toInt(position.qty)} />
-                <MetricTile label="止损价" value={toPrice(stopLossPrice)} />
-                <MetricTile label="止盈价" value={toPrice(takeProfitPrice)} />
+                <MetricTile label="实际止损触发价" value={toPrice(stopLossPrice)} />
+                <MetricTile label="实际止盈触发价" value={toPrice(takeProfitPrice)} />
                 <MetricTile label="距止损" value={`${(slDistancePct * 100).toFixed(2)}%`} positive={slDistancePct >= 0.01} />
                 <MetricTile label="未实现盈亏" value={`${(unrealizedPnlPct * 100).toFixed(2)}%`} positive={unrealizedPnlPct >= 0} />
                 <MetricTile label="保证金" value={toIntMoney(margin)} />
                 <MetricTile label="未实现盈亏" value={toIntMoney(unrealizedPnl)} positive={unrealizedPnl >= 0} />
                 <MetricTile label="收益/保证金" value={`${toInt(pnlReturnRatio * 100)}%`} positive={pnlReturnRatio >= 0} />
-                {liqPrice > 0 && <MetricTile label="强平价" value={toPrice(liqPrice)} />}
-                {liqDistPct > 0 && <MetricTile label="距强平" value={`${(liqDistPct * 100).toFixed(2)}%`} positive={liqDistPct >= 0.05} />}
+                {liqPrice > 0 && <MetricTile label={liquidationLabel} value={toPrice(liqPrice)} />}
+                {liqDistPct > 0 && <MetricTile label={liquidationDistanceLabel} value={`${(liqDistPct * 100).toFixed(2)}%`} positive={liqDistPct >= 0.05} />}
+              </div>
+              <div style={{ marginTop: 10, fontSize: 12, color: '#64748b', lineHeight: 1.6 }}>
+                {hasMissingConditionalOrder ? (
+                  <div style={{ marginBottom: 8, color: '#b91c1c', fontWeight: 800 }}>
+                    ??????????? {conditionalStatus?.stop_loss || '-'}??? {conditionalStatus?.take_profit || '-'}?????????????
+                  </div>
+                ) : null}
+                {hasPersistedTargets
+                  ? '当前显示的是后端持仓记录里的真实触发价，机器人止损/止盈会优先按这两个价格判断。'
+                  : '当前显示的是根据开仓价和策略参数推导出的触发价；若后端已保存真实触发价，会优先使用真实值。'}
               </div>
             </div>
           )
@@ -310,6 +344,10 @@ export function HistoryStatsCard({ historyStats }: { historyStats: HistoryStats 
 
 export function EquityCurveCard({ equityCurve }: { equityCurve: EquityPoint[] }) {
   const curvePath = buildCurvePath(equityCurve)
+  const curvePoints = useMemo(() => buildCurvePoints(equityCurve), [equityCurve])
+  const [hoveredIndex, setHoveredIndex] = useState<number | null>(null)
+
+  const hoveredPoint = hoveredIndex != null ? curvePoints[hoveredIndex] : null
 
   return (
     <div style={cardStyle}>
@@ -318,10 +356,65 @@ export function EquityCurveCard({ equityCurve }: { equityCurve: EquityPoint[] })
         <p style={{ color: '#6b7280' }}>暂无曲线数据，先跑几次模拟交易或策略执行</p>
       ) : (
         <>
-          <div style={{ ...panelStyle, padding: 12 }}>
-            <svg viewBox="0 0 520 180" style={{ width: '100%', height: 180, background: 'linear-gradient(180deg, #f8fbff 0%, #eff6ff 100%)', borderRadius: 14 }}>
+          <div style={{ ...panelStyle, padding: 12, position: 'relative' }}>
+            <svg
+              viewBox="0 0 520 180"
+              style={{ width: '100%', height: 180, background: 'linear-gradient(180deg, #f8fbff 0%, #eff6ff 100%)', borderRadius: 14, overflow: 'visible' }}
+              onMouseLeave={() => setHoveredIndex(null)}
+              onMouseMove={(event) => {
+                const rect = event.currentTarget.getBoundingClientRect()
+                const ratio = rect.width > 0 ? (event.clientX - rect.left) / rect.width : 0
+                const nextIndex = Math.min(
+                  curvePoints.length - 1,
+                  Math.max(0, Math.round(ratio * Math.max(curvePoints.length - 1, 0))),
+                )
+                setHoveredIndex(nextIndex)
+              }}
+            >
               <path d={curvePath} fill="none" stroke="#2563eb" strokeWidth="3" />
+              {curvePoints.map((point) => (
+                <circle
+                  key={`${point.item.id}-${point.index}`}
+                  cx={point.x}
+                  cy={point.y}
+                  r={hoveredIndex === point.index ? 5 : 0}
+                  fill="#2563eb"
+                  stroke="#ffffff"
+                  strokeWidth="2"
+                />
+              ))}
+              {hoveredPoint ? (
+                <>
+                  <line x1={hoveredPoint.x} y1="12" x2={hoveredPoint.x} y2="168" stroke="rgba(37,99,235,0.28)" strokeDasharray="4 4" />
+                  <circle cx={hoveredPoint.x} cy={hoveredPoint.y} r="6" fill="#2563eb" stroke="#ffffff" strokeWidth="2.5" />
+                </>
+              ) : null}
             </svg>
+            {hoveredPoint ? (
+              <div
+                style={{
+                  position: 'absolute',
+                  left: `clamp(12px, calc(${((hoveredPoint.x / 520) * 100).toFixed(2)}% - 70px), calc(100% - 180px))`,
+                  top: 22,
+                  minWidth: 170,
+                  pointerEvents: 'none',
+                  padding: '10px 12px',
+                  borderRadius: 12,
+                  background: 'rgba(15,23,42,0.94)',
+                  color: '#f8fafc',
+                  boxShadow: '0 12px 28px rgba(15,23,42,0.28)',
+                  border: '1px solid rgba(148,163,184,0.22)',
+                  fontSize: 12,
+                  lineHeight: 1.55,
+                }}
+              >
+                <div style={{ fontWeight: 700, marginBottom: 6 }}>{formatDateTime(hoveredPoint.item.created_at)}</div>
+                <div>权益：{formatMoney(hoveredPoint.item.equity)}</div>
+                <div>已实现盈亏：{formatMoney(hoveredPoint.item.realized_pnl)}</div>
+                <div>未实现盈亏：{formatMoney(hoveredPoint.item.unrealized_pnl)}</div>
+                <div>占用保证金：{formatMoney(hoveredPoint.item.margin_used)}</div>
+              </div>
+            ) : null}
           </div>
           <div style={{ ...metricGridStyle, marginTop: 12 }}>
             <MetricTile label="起点权益" value={formatMoney(equityCurve[0]?.equity)} />

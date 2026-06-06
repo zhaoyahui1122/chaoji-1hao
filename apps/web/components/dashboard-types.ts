@@ -68,6 +68,10 @@ export type DashboardData = {
     liquidation_distance_ratio: number
     stop_loss_price?: number | null
     take_profit_price?: number | null
+    conditional_order_status?: {
+      stop_loss?: string
+      take_profit?: string
+    } | null
     margin?: number
     liq_price?: number
     open_order_meta_json?: string | null
@@ -117,6 +121,8 @@ export type StrategyConfig = {
   kdj_oversold?: number
   min_signal_score?: number
   churn_guard_enabled?: boolean
+  classic_trend_filter_enabled?: boolean
+  classic_cooldown_bars?: number
   turtle_entry_period: number
   turtle_exit_period: number
   turtle_atr_period: number
@@ -272,11 +278,17 @@ export type BacktestSummary = CostSummary & {
   total_net_pnl: number
 }
 
+export type BacktestRunSettings = {
+  backtest_days?: number
+  start_date?: string
+  end_date?: string
+}
+
 export type BacktestInput = {
   data_source?: string
   symbol?: string
   timeframe?: string
-  strategy_type?: 'classic' | 'turtle'
+  strategy_type?: 'classic' | 'turtle' | 'ict'
   leverage?: number
   initial_balance?: number
   allocated_margin?: number
@@ -285,6 +297,8 @@ export type BacktestInput = {
   entry_price?: number
   stop_loss_price?: number
   backtest_days?: number
+  start_date?: string
+  end_date?: string
   use_boll?: boolean
   boll_period?: number
   boll_std?: number
@@ -328,6 +342,11 @@ export type MarketDataMeta = {
   actual_source: string
   fallback_used: boolean
   warning?: string | null
+  candles?: number
+  requested_window_start?: string | null
+  requested_window_end?: string | null
+  actual_window_start?: string | null
+  actual_window_end?: string | null
 }
 
 export type BacktestResult = {
@@ -335,6 +354,7 @@ export type BacktestResult = {
   input: BacktestInput
   market_data: MarketDataMeta & Record<string, unknown>
   risk: BacktestRisk
+  assumptions?: Record<string, unknown>
   summary: BacktestSummary
   equity_curve: Array<{ timestamp: string; equity: number }>
   trades: BacktestTrade[]
@@ -373,7 +393,7 @@ export type RunnerLogItem = {
   config?: {
     symbol?: string
     timeframe?: string
-    strategy_type?: 'classic' | 'turtle'
+    strategy_type?: 'classic' | 'turtle' | 'ict'
     [key: string]: unknown
   }
   result?: RunnerExecutionResult | null
@@ -391,10 +411,10 @@ export type HistoryFilters = {
 }
 
 export const surfaceStyle: React.CSSProperties = {
-  border: '1px solid rgba(148, 163, 184, 0.18)',
+  border: '1px solid rgba(255, 255, 255, 0.08)',
   borderRadius: 24,
-  background: 'linear-gradient(180deg, rgba(255,255,255,0.96) 0%, rgba(248,250,252,0.98) 100%)',
-  boxShadow: '0 18px 40px rgba(15, 23, 42, 0.08)',
+  background: 'linear-gradient(180deg, rgba(16,18,24,0.96) 0%, rgba(11,13,18,0.98) 100%)',
+  boxShadow: '0 22px 44px rgba(0, 0, 0, 0.22)',
   backdropFilter: 'blur(10px)',
 }
 
@@ -410,7 +430,7 @@ export const compactCardStyle: React.CSSProperties = {
 
 export const labelStyle: React.CSSProperties = {
   fontSize: 12,
-  color: '#64748b',
+  color: '#9ca3af',
   marginBottom: 8,
   textTransform: 'uppercase',
   letterSpacing: '0.08em',
@@ -427,12 +447,12 @@ export const sectionTitleStyle: React.CSSProperties = {
   fontSize: 24,
   fontWeight: 800,
   letterSpacing: '-0.03em',
-  color: '#0f172a',
+  color: '#f9fafb',
 }
 
 export const sectionHintStyle: React.CSSProperties = {
   margin: '6px 0 0',
-  color: '#64748b',
+  color: '#9ca3af',
   fontSize: 13,
   lineHeight: 1.6,
 }
@@ -448,7 +468,7 @@ export const metricValueLgStyle: React.CSSProperties = {
   fontSize: 30,
   fontWeight: 800,
   letterSpacing: '-0.04em',
-  color: '#0f172a',
+  color: '#f9fafb',
 }
 
 export const metricSubtleRowStyle: React.CSSProperties = {
@@ -456,7 +476,7 @@ export const metricSubtleRowStyle: React.CSSProperties = {
   justifyContent: 'space-between',
   gap: 12,
   alignItems: 'center',
-  color: '#64748b',
+  color: '#9ca3af',
   fontSize: 12,
 }
 

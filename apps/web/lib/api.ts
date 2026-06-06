@@ -12,12 +12,78 @@ import type {
 } from '../components/dashboard-types'
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE || 'http://127.0.0.1:8012'
-const API_KEY = process.env.NEXT_PUBLIC_API_KEY || ''
 
 function apiHeaders(extra?: Record<string, string>): Record<string, string> {
-  const h: Record<string, string> = { ...extra }
-  if (API_KEY) h['X-API-Key'] = API_KEY
-  return h
+  return { ...extra }
+}
+
+export class ApiError extends Error {
+  status: number
+
+  constructor(message: string, status: number) {
+    super(message)
+    this.name = 'ApiError'
+    this.status = status
+  }
+}
+
+export type SessionResponse = {
+  authenticated: boolean
+  username?: string
+}
+
+async function apiFetch(input: string, init?: RequestInit): Promise<Response> {
+  return fetch(input, {
+    credentials: 'include',
+    ...init,
+    headers: apiHeaders(init?.headers as Record<string, string> | undefined),
+  })
+}
+
+async function parseApiError(res: Response, fallbackMessage: string): Promise<ApiError> {
+  const error = await res.json().catch(() => ({ detail: fallbackMessage }))
+  return new ApiError(error.detail || fallbackMessage, res.status)
+}
+
+export async function login(username: string, password: string): Promise<SessionResponse> {
+  const res = await apiFetch(`${API_BASE}/auth/login`, {
+    method: 'POST',
+    headers: apiHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify({ username, password }),
+  })
+  if (!res.ok) throw await parseApiError(res, '登录失败')
+  return res.json()
+}
+
+export async function logout(): Promise<{ authenticated: false }> {
+  const res = await apiFetch(`${API_BASE}/auth/logout`, {
+    method: 'POST',
+  })
+  if (!res.ok) throw await parseApiError(res, '退出失败')
+  return res.json()
+}
+
+export async function getSession(): Promise<SessionResponse> {
+  const res = await apiFetch(`${API_BASE}/auth/session`, { cache: 'no-store' })
+  if (!res.ok) throw await parseApiError(res, '获取会话失败')
+  return res.json()
+}
+
+function confirmHighRiskOperation(message: string): void {
+  if (typeof window === 'undefined') return
+  const ok = window.confirm(message)
+  if (!ok) throw new Error('已取消高风险操作')
+}
+
+export async function getOperationToken(action: string): Promise<string> {
+  const res = await apiFetch(`${API_BASE}/auth/operation-token`, {
+    method: 'POST',
+    headers: apiHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify({ action }),
+  })
+  if (!res.ok) throw await parseApiError(res, '获取操作确认令牌失败')
+  const data = await res.json()
+  return data.operation_token
 }
 
 export type CandleItem = {
@@ -103,6 +169,8 @@ export type BacktestRequestPayload = {
   entry_price: number
   stop_loss_price: number
   backtest_days?: number
+  start_date?: string
+  end_date?: string
   use_boll?: boolean
   boll_period: number
   boll_std: number
@@ -148,6 +216,7 @@ export type RunnerRequestPayload = {
   strategy_type: 'classic' | 'turtle' | 'ict'
   data_source: DataSource
   trade_mode?: 'paper' | 'live'
+  direction_mode?: 'auto' | 'long_only' | 'short_only'
   leverage: number
   allocated_margin: number
   use_boll?: boolean
@@ -171,6 +240,8 @@ export type RunnerRequestPayload = {
   kdj_oversold?: number
   min_signal_score?: number
   churn_guard_enabled?: boolean
+  classic_trend_filter_enabled?: boolean
+  classic_cooldown_bars?: number
   turtle_entry_period: number
   turtle_exit_period: number
   turtle_atr_period: number
@@ -183,6 +254,7 @@ export type RunnerRequestPayload = {
   risk_per_trade_pct: number
   fee_rate: number
   slippage_rate: number
+  operation_token?: string
 }
 
 export type RunnerStatusResponse = {
@@ -299,35 +371,35 @@ function buildQuery(params: Record<string, string | number | undefined | null>) 
 
 export async function getDashboard(): Promise<DashboardData> {
 
-  const res = await fetch(`${API_BASE}/dashboard`, { cache: 'no-store', headers: apiHeaders() })
+  const res = await apiFetch(`${API_BASE}/dashboard`, { cache: 'no-store' })
   if (!res.ok) throw new Error('Failed to load dashboard')
   return res.json()
 }
 
 export async function getMarketTicker(symbol: Symbol): Promise<MarketTicker> {
 
-  const res = await fetch(`${API_BASE}/market/ticker/${symbol}`, { cache: 'no-store', headers: apiHeaders() })
+  const res = await apiFetch(`${API_BASE}/market/ticker/${symbol}`, { cache: 'no-store' })
   if (!res.ok) throw new Error('Failed to load market ticker')
   return res.json()
 }
 
 export async function getMarketCandles(symbol: Symbol, timeframe: Timeframe, limit = 120): Promise<{ symbol: Symbol; timeframe: Timeframe; items: CandleItem[] }> {
 
-  const res = await fetch(`${API_BASE}/market/candles/${symbol}?timeframe=${timeframe}&limit=${limit}`, { cache: 'no-store', headers: apiHeaders() })
+  const res = await apiFetch(`${API_BASE}/market/candles/${symbol}?timeframe=${timeframe}&limit=${limit}`, { cache: 'no-store' })
   if (!res.ok) throw new Error('Failed to load market candles')
   return res.json()
 }
 
 export async function getStrategy(): Promise<StrategyResponse> {
 
-  const res = await fetch(`${API_BASE}/strategy`, { cache: 'no-store', headers: apiHeaders() })
+  const res = await apiFetch(`${API_BASE}/strategy`, { cache: 'no-store' })
   if (!res.ok) throw new Error('Failed to load strategy')
   return res.json()
 }
 
 export async function saveStrategy(payload: StrategySavePayload): Promise<StrategyResponse> {
 
-  const res = await fetch(`${API_BASE}/strategy`, {
+  const res = await apiFetch(`${API_BASE}/strategy`, {
     method: 'POST',
     headers: apiHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify(payload),
@@ -339,7 +411,7 @@ export async function saveStrategy(payload: StrategySavePayload): Promise<Strate
 
 export async function runBacktest(payload: BacktestRequestPayload): Promise<BacktestResult> {
 
-  const res = await fetch(`${API_BASE}/backtest`, {
+  const res = await apiFetch(`${API_BASE}/backtest`, {
     method: 'POST',
     headers: apiHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify(payload),
@@ -349,11 +421,16 @@ export async function runBacktest(payload: BacktestRequestPayload): Promise<Back
 }
 
 export async function runStrategyOnce(payload: RunnerRequestPayload): Promise<RunnerInvocationResult> {
+  const finalPayload = { ...payload }
+  if (finalPayload.trade_mode === 'live' && !finalPayload.operation_token) {
+    confirmHighRiskOperation(`确认在实盘执行一次策略吗？\n交易对：${finalPayload.symbols?.join(' / ') || finalPayload.symbol}\n杠杆：${finalPayload.leverage}x\n方向模式：${finalPayload.direction_mode || 'auto'}`)
+    finalPayload.operation_token = await getOperationToken('runner_live_trade')
+  }
 
-  const res = await fetch(`${API_BASE}/runner/run-once`, {
+  const res = await apiFetch(`${API_BASE}/runner/run-once`, {
     method: 'POST',
     headers: apiHeaders({ 'Content-Type': 'application/json' }),
-    body: JSON.stringify(payload),
+    body: JSON.stringify(finalPayload),
   })
   if (!res.ok) throw new Error('Failed to run strategy once')
   return res.json()
@@ -361,24 +438,28 @@ export async function runStrategyOnce(payload: RunnerRequestPayload): Promise<Ru
 
 export async function getRunnerLogs(): Promise<RunnerLogsResponse> {
 
-  const res = await fetch(`${API_BASE}/runner/logs`, { cache: 'no-store', headers: apiHeaders() })
+  const res = await apiFetch(`${API_BASE}/runner/logs`, { cache: 'no-store' })
   if (!res.ok) throw new Error('Failed to load runner logs')
   return res.json()
 }
 
 export async function getRunnerStatus(): Promise<RunnerStatusResponse> {
 
-  const res = await fetch(`${API_BASE}/runner/status`, { cache: 'no-store', headers: apiHeaders() })
+  const res = await apiFetch(`${API_BASE}/runner/status`, { cache: 'no-store' })
   if (!res.ok) throw new Error('Failed to load runner status')
   return res.json()
 }
 
 export async function toggleRunner(enabled: boolean, symbols?: Symbol[] | null, tradeMode?: 'paper' | 'live'): Promise<RunnerToggleResponse> {
+  if (enabled) {
+    confirmHighRiskOperation(`${tradeMode === 'live' ? '确认启动实盘机器人？' : '确认启动模拟机器人？'}\n交易对：${symbols?.join(' / ') || '-'}\n启动后系统会按当前策略自动执行。`)
+  }
+  const operation_token = enabled ? await getOperationToken(tradeMode === 'live' ? 'runner_toggle_live' : 'runner_toggle') : undefined
 
-  const res = await fetch(`${API_BASE}/runner/toggle`, {
+  const res = await apiFetch(`${API_BASE}/runner/toggle`, {
     method: 'POST',
     headers: apiHeaders({ 'Content-Type': 'application/json' }),
-    body: JSON.stringify({ enabled, symbols, trade_mode: tradeMode || 'paper' }),
+    body: JSON.stringify({ enabled, symbols, trade_mode: tradeMode || 'paper', operation_token }),
   })
   if (!res.ok) throw new Error('Failed to toggle runner')
   return res.json()
@@ -386,7 +467,7 @@ export async function toggleRunner(enabled: boolean, symbols?: Symbol[] | null, 
 
 export async function resumeRunner(): Promise<RunnerResumeResponse> {
 
-  const res = await fetch(`${API_BASE}/runner/resume`, {
+  const res = await apiFetch(`${API_BASE}/runner/resume`, {
     method: 'POST',
     headers: apiHeaders(),
   })
@@ -395,7 +476,7 @@ export async function resumeRunner(): Promise<RunnerResumeResponse> {
 }
 
 export async function resetPaperAccount(initialBalance: number): Promise<{ ok: boolean }> {
-  const res = await fetch(`${API_BASE}/paper/reset-custom`, {
+  const res = await apiFetch(`${API_BASE}/paper/reset-custom`, {
     method: 'POST',
     headers: apiHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify({ initial_balance: initialBalance }),
@@ -406,14 +487,14 @@ export async function resetPaperAccount(initialBalance: number): Promise<{ ok: b
 
 export async function getPaperSnapshot(): Promise<PaperSnapshotResponse> {
 
-  const res = await fetch(`${API_BASE}/paper/snapshot`, { cache: 'no-store', headers: apiHeaders() })
+  const res = await apiFetch(`${API_BASE}/paper/snapshot`, { cache: 'no-store' })
   if (!res.ok) throw new Error('Failed to load paper snapshot')
   return res.json()
 }
 
 export async function getEquityCurve(limit = 100, tradeMode?: string): Promise<EquityCurveResponse> {
   const query = buildQuery({ limit, trade_mode: tradeMode })
-  const res = await fetch(`${API_BASE}/history/equity-curve${query}`, { cache: 'no-store', headers: apiHeaders() })
+  const res = await apiFetch(`${API_BASE}/history/equity-curve${query}`, { cache: 'no-store' })
   if (!res.ok) throw new Error('Failed to load equity curve')
   return res.json()
 }
@@ -424,7 +505,7 @@ export async function getOrderHistory(
 ): Promise<OrderHistoryResponse> {
 
   const query = buildQuery({ limit, ...filters })
-  const res = await fetch(`${API_BASE}/history/orders${query}`, { cache: 'no-store', headers: apiHeaders() })
+  const res = await apiFetch(`${API_BASE}/history/orders${query}`, { cache: 'no-store' })
   if (!res.ok) throw new Error('Failed to load order history')
   return res.json()
 }
@@ -435,14 +516,14 @@ export async function getPositionHistory(
 ): Promise<PositionHistoryResponse> {
 
   const query = buildQuery({ limit, ...filters })
-  const res = await fetch(`${API_BASE}/history/positions${query}`, { cache: 'no-store', headers: apiHeaders() })
+  const res = await apiFetch(`${API_BASE}/history/positions${query}`, { cache: 'no-store' })
   if (!res.ok) throw new Error('Failed to load position history')
   return res.json()
 }
 
 export async function getHistoryStats(tradeMode?: string): Promise<HistoryStats> {
   const query = buildQuery({ trade_mode: tradeMode })
-  const res = await fetch(`${API_BASE}/history/stats${query}`, { cache: 'no-store', headers: apiHeaders() })
+  const res = await apiFetch(`${API_BASE}/history/stats${query}`, { cache: 'no-store' })
   if (!res.ok) throw new Error('Failed to load history stats')
   return res.json()
 }
@@ -450,7 +531,7 @@ export async function getHistoryStats(tradeMode?: string): Promise<HistoryStats>
 export async function placePaperOrder(payload: PaperTradePayload): Promise<PaperOrderResponse> {
 
 
-  const res = await fetch(`${API_BASE}/paper/order`, {
+  const res = await apiFetch(`${API_BASE}/paper/order`, {
     method: 'POST',
     headers: apiHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify(payload),
@@ -462,7 +543,7 @@ export async function placePaperOrder(payload: PaperTradePayload): Promise<Paper
 export async function updatePaperMark(payload: PaperMarkPayload): Promise<PaperMarkResponse> {
 
 
-  const res = await fetch(`${API_BASE}/paper/mark`, {
+  const res = await apiFetch(`${API_BASE}/paper/mark`, {
     method: 'POST',
     headers: apiHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify(payload),
@@ -474,7 +555,7 @@ export async function updatePaperMark(payload: PaperMarkPayload): Promise<PaperM
 export async function closePaperPosition(payload: PaperClosePayload): Promise<PaperCloseResponse> {
 
 
-  const res = await fetch(`${API_BASE}/paper/close`, {
+  const res = await apiFetch(`${API_BASE}/paper/close`, {
     method: 'POST',
     headers: apiHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify(payload),
@@ -500,13 +581,13 @@ export type StrategySlotActionResponse = {
 }
 
 export async function getStrategySlots(): Promise<StrategySlotsResponse> {
-  const res = await fetch(`${API_BASE}/strategy/slots`, { cache: 'no-store', headers: apiHeaders() })
+  const res = await apiFetch(`${API_BASE}/strategy/slots`, { cache: 'no-store' })
   if (!res.ok) throw new Error('Failed to load strategy slots')
   return res.json()
 }
 
 export async function addStrategySlot(name?: string): Promise<StrategySlotAddResponse> {
-  const res = await fetch(`${API_BASE}/strategy/slots/add`, {
+  const res = await apiFetch(`${API_BASE}/strategy/slots/add`, {
     method: 'POST',
     headers: apiHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify({ name }),
@@ -516,7 +597,7 @@ export async function addStrategySlot(name?: string): Promise<StrategySlotAddRes
 }
 
 export async function updateStrategySlotName(slotId: number, name: string): Promise<StrategySlotActionResponse> {
-  const res = await fetch(`${API_BASE}/strategy/slots/${slotId}/name`, {
+  const res = await apiFetch(`${API_BASE}/strategy/slots/${slotId}/name`, {
     method: 'POST',
     headers: apiHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify({ name }),
@@ -529,7 +610,7 @@ export async function updateStrategySlotName(slotId: number, name: string): Prom
 }
 
 export async function updateStrategySlotConfig(slotId: number, config: StrategyConfig): Promise<StrategySlotActionResponse> {
-  const res = await fetch(`${API_BASE}/strategy/slots/${slotId}/config`, {
+  const res = await apiFetch(`${API_BASE}/strategy/slots/${slotId}/config`, {
     method: 'POST',
     headers: apiHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify(config),
@@ -542,7 +623,7 @@ export async function updateStrategySlotConfig(slotId: number, config: StrategyC
 }
 
 export async function deleteStrategySlot(slotId: number): Promise<StrategySlotActionResponse> {
-  const res = await fetch(`${API_BASE}/strategy/slots/${slotId}`, {
+  const res = await apiFetch(`${API_BASE}/strategy/slots/${slotId}`, {
     method: 'DELETE',
     headers: apiHeaders(),
   })
@@ -583,16 +664,18 @@ export type LiveAccountStatus = {
 }
 
 export async function getLiveAccountStatus(): Promise<LiveAccountStatus> {
-  const res = await fetch(`${API_BASE}/live-account/status`, { cache: 'no-store', headers: apiHeaders() })
+  const res = await apiFetch(`${API_BASE}/live-account/status`, { cache: 'no-store' })
   if (!res.ok) throw new Error('Failed to load live account status')
   return res.json()
 }
 
 export async function connectLiveAccount(api_key: string, api_secret: string): Promise<LiveAccountStatus> {
-  const res = await fetch(`${API_BASE}/live-account/connect`, {
+  confirmHighRiskOperation('确认连接实盘 API？请确认该 API 权限和来源安全。')
+  const operation_token = await getOperationToken('live_connect')
+  const res = await apiFetch(`${API_BASE}/live-account/connect`, {
     method: 'POST',
     headers: apiHeaders({ 'Content-Type': 'application/json' }),
-    body: JSON.stringify({ api_key, api_secret }),
+    body: JSON.stringify({ api_key, api_secret, operation_token }),
   })
   if (!res.ok) {
     const error = await res.json().catch(() => ({ detail: '连接失败' }))
@@ -602,7 +685,7 @@ export async function connectLiveAccount(api_key: string, api_secret: string): P
 }
 
 export async function refreshLiveAccount(): Promise<LiveAccountStatus> {
-  const res = await fetch(`${API_BASE}/live-account/refresh`, {
+  const res = await apiFetch(`${API_BASE}/live-account/refresh`, {
     method: 'POST',
     headers: apiHeaders(),
   })
@@ -614,10 +697,12 @@ export async function refreshLiveAccount(): Promise<LiveAccountStatus> {
 }
 
 export async function closeLivePosition(symbol: string, position_id?: string): Promise<any> {
-  const res = await fetch(`${API_BASE}/live-account/close`, {
+  confirmHighRiskOperation(`确认实盘市价平仓 ${symbol}？该操作会立即提交 reduce-only 平仓单。`)
+  const operation_token = await getOperationToken('live_close_position')
+  const res = await apiFetch(`${API_BASE}/live-account/close`, {
     method: 'POST',
     headers: apiHeaders({ 'Content-Type': 'application/json' }),
-    body: JSON.stringify({ symbol, position_id }),
+    body: JSON.stringify({ symbol, position_id, operation_token }),
   })
   if (!res.ok) {
     const error = await res.json().catch(() => ({ detail: '平仓失败' }))
@@ -627,9 +712,12 @@ export async function closeLivePosition(symbol: string, position_id?: string): P
 }
 
 export async function closeAllLivePositions(): Promise<any> {
-  const res = await fetch(`${API_BASE}/live-account/close-all`, {
+  confirmHighRiskOperation('确认一键平掉所有实盘持仓？该操作不可撤销。')
+  const operation_token = await getOperationToken('live_close_all')
+  const res = await apiFetch(`${API_BASE}/live-account/close-all`, {
     method: 'POST',
-    headers: apiHeaders(),
+    headers: apiHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify({ operation_token }),
   })
   if (!res.ok) {
     const error = await res.json().catch(() => ({ detail: '一键平仓失败' }))
@@ -649,7 +737,7 @@ export type ContractInfo = {
 }
 
 export async function getContractInfo(symbol: string): Promise<ContractInfo> {
-  const res = await fetch(`${API_BASE}/live-account/contract/${symbol}`, { cache: 'no-store', headers: apiHeaders() })
+  const res = await apiFetch(`${API_BASE}/live-account/contract/${symbol}`, { cache: 'no-store' })
   if (!res.ok) throw new Error('Failed to load contract info')
   return res.json()
 }
@@ -663,13 +751,13 @@ export type StrategySnapshot = {
 }
 
 export async function getStrategySnapshots(limit = 20): Promise<{ snapshots: StrategySnapshot[] }> {
-  const res = await fetch(`${API_BASE}/strategy/snapshots?limit=${limit}`, { cache: 'no-store', headers: apiHeaders() })
+  const res = await apiFetch(`${API_BASE}/strategy/snapshots?limit=${limit}`, { cache: 'no-store' })
   if (!res.ok) throw new Error('Failed to load snapshots')
   return res.json()
 }
 
 export async function rollbackStrategy(snapshotId: number): Promise<{ ok: boolean; message: string; config: StrategyConfig }> {
-  const res = await fetch(`${API_BASE}/strategy/rollback/${snapshotId}`, {
+  const res = await apiFetch(`${API_BASE}/strategy/rollback/${snapshotId}`, {
     method: 'POST',
     headers: apiHeaders(),
   })
@@ -687,7 +775,7 @@ export function exportTradesUrl(mode: 'paper' | 'live' = 'paper', format: 'csv' 
 }
 
 export async function getExportSummary(mode: 'paper' | 'live' = 'paper'): Promise<Record<string, unknown>> {
-  const res = await fetch(`${API_BASE}/export/summary?mode=${mode}`, { cache: 'no-store', headers: apiHeaders() })
+  const res = await apiFetch(`${API_BASE}/export/summary?mode=${mode}`, { cache: 'no-store' })
   if (!res.ok) throw new Error('Failed to load export summary')
   return res.json()
 }

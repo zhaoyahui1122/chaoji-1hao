@@ -9,19 +9,33 @@ from slowapi.errors import RateLimitExceeded
 from app.api.routes import router
 from app.core.log_config import setup_logging, get_logger
 from app.core.rate_limit import limiter
+from app.services.auth_service import (
+    AuthConfigError,
+    SESSION_COOKIE_NAME,
+    load_auth_settings,
+    parse_session_token,
+)
 from app.services.db import init_db
 from app.services.scheduler import ensure_scheduler_started, stop_scheduler
 
 setup_logging()
 logger = get_logger(__name__)
 
-API_SECRET_KEY = os.environ.get("API_SECRET_KEY", "")
-
 app = FastAPI(title="Quant Gate MVP API", version="0.1.0")
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
-_cors_origins = os.environ.get("CORS_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000").split(",")
+_default_cors_origins = ",".join([
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "http://localhost:3100",
+    "http://127.0.0.1:3100",
+])
+_cors_origins = [
+    origin.strip()
+    for origin in os.environ.get("CORS_ORIGINS", _default_cors_origins).split(",")
+    if origin.strip()
+]
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_origins,
@@ -30,17 +44,25 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-EXEMPT_PATHS = {"/health", "/docs", "/openapi.json"}
+EXEMPT_PATHS = {"/health", "/docs", "/openapi.json", "/auth/login", "/auth/session"}
 
 
 @app.middleware("http")
-async def api_key_auth(request: Request, call_next):
-    if not API_SECRET_KEY or request.url.path in EXEMPT_PATHS:
+async def session_auth(request: Request, call_next):
+    if request.method.upper() == "OPTIONS":
         return await call_next(request)
-    provided_key = request.headers.get("X-API-Key", "")
-    if provided_key != API_SECRET_KEY:
-        return JSONResponse(status_code=401, content={"detail": "Invalid or missing API key"})
+
+    if request.url.path in EXEMPT_PATHS:
+        return await call_next(request)
+
+    settings = load_auth_settings(required=True)
+    token = request.cookies.get(SESSION_COOKIE_NAME, "")
+    payload = parse_session_token(token, settings.session_secret)
+    if not payload:
+        return JSONResponse(status_code=401, content={"detail": "Authentication required"})
+    request.state.auth_user = payload.get("sub")
     return await call_next(request)
+
 
 app.include_router(router)
 
@@ -48,8 +70,11 @@ app.include_router(router)
 @app.on_event("startup")
 def on_startup():
     logger.info("Starting Quant Gate MVP API")
-    if not API_SECRET_KEY:
-        logger.warning("API_SECRET_KEY 未设置 — 所有接口无认证保护！生产环境请务必设置该环境变量")
+    try:
+        load_auth_settings(required=True)
+    except AuthConfigError as exc:
+        logger.error("Authentication configuration invalid: %s", exc)
+        raise RuntimeError(str(exc)) from exc
     init_db()
     ensure_scheduler_started()
     logger.info("Startup complete")

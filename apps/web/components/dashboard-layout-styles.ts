@@ -6,39 +6,42 @@ export const plainStateStyle: React.CSSProperties = {
   alignItems: 'center',
   justifyContent: 'center',
   padding: 24,
-  background: '#020617',
-  color: '#e2e8f0',
+  background: '#05070b',
+  color: '#f3f4f6',
   fontFamily: 'Inter, Arial, sans-serif',
 }
 
 export const shellStyle: React.CSSProperties = {
   minHeight: '100vh',
-  background: 'radial-gradient(circle at top left, rgba(14,165,233,0.16) 0%, rgba(2,6,23,0.95) 28%, #020617 62%, #020617 100%)',
-  color: '#e2e8f0',
+  background: `
+    radial-gradient(circle at top, rgba(255,255,255,0.03) 0%, rgba(5,7,11,0) 26%),
+    linear-gradient(180deg, #05070b 0%, #090a0d 38%, #0b0c10 100%)
+  `,
+  color: '#f3f4f6',
   fontFamily: 'Inter, Arial, sans-serif',
 }
 
 export const shellGridStyle: React.CSSProperties = {
   display: 'grid',
-  gridTemplateColumns: '300px minmax(0, 1fr)',
+  gridTemplateColumns: '320px minmax(0, 1fr)',
   gridTemplateRows: '1fr',
-  gap: 20,
-  padding: 20,
+  gap: 22,
+  padding: 22,
   height: '100vh',
   overflow: 'hidden',
 }
 
 export const sidebarStyle: React.CSSProperties = {
   position: 'sticky',
-  top: 20,
+  top: 22,
   display: 'grid',
-  gap: 18,
-  padding: 18,
+  gap: 20,
+  padding: 20,
   borderRadius: 28,
-  background: 'linear-gradient(180deg, rgba(15,23,42,0.94) 0%, rgba(2,6,23,0.98) 100%)',
-  border: '1px solid rgba(51,65,85,0.9)',
-  boxShadow: '0 28px 60px rgba(2,8,23,0.45)',
-  maxHeight: 'calc(100vh - 40px)',
+  background: 'linear-gradient(180deg, rgba(12,14,18,0.98) 0%, rgba(9,11,15,0.99) 46%, rgba(6,8,12,1) 100%)',
+  border: '1px solid rgba(255,255,255,0.08)',
+  boxShadow: '0 32px 80px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.05)',
+  maxHeight: 'calc(100vh - 44px)',
   overflowY: 'auto',
 }
 
@@ -52,15 +55,15 @@ export const brandWrapStyle: React.CSSProperties = {
 export const brandBadgeStyle: React.CSSProperties = {
   width: 56,
   height: 56,
-  borderRadius: 18,
+  borderRadius: 20,
   display: 'flex',
   alignItems: 'center',
   justifyContent: 'center',
   fontWeight: 900,
   letterSpacing: '0.08em',
-  color: '#dbeafe',
-  background: 'linear-gradient(135deg, #0ea5e9 0%, #1d4ed8 100%)',
-  boxShadow: '0 18px 36px rgba(37,99,235,0.35)',
+  color: '#f9fafb',
+  background: 'linear-gradient(135deg, #17191d 0%, #22252b 100%)',
+  boxShadow: '0 14px 32px rgba(0,0,0,0.28)',
 }
 
 export const brandTitleStyle: React.CSSProperties = {
@@ -73,14 +76,14 @@ export const brandSubtleStyle: React.CSSProperties = {
   margin: '8px 0 0',
   fontSize: 13,
   lineHeight: 1.65,
-  color: '#94a3b8',
+  color: '#9ca3af',
 }
 
 export const eyebrowStyle: React.CSSProperties = {
   fontSize: 11,
   letterSpacing: '0.12em',
   textTransform: 'uppercase',
-  color: '#38bdf8',
+  color: '#d1d5db',
 }
 
 export const sidebarStatStackStyle: React.CSSProperties = {
@@ -91,16 +94,16 @@ export const sidebarStatStackStyle: React.CSSProperties = {
 export const sidebarMetricCardStyle: React.CSSProperties = {
   display: 'grid',
   gap: 6,
-  padding: '14px 16px',
+  padding: '15px 16px',
   borderRadius: 18,
-  background: 'rgba(15,23,42,0.88)',
+  background: 'linear-gradient(180deg, rgba(18,21,28,0.94) 0%, rgba(12,15,20,0.92) 100%)',
 }
 
 export const sidebarMetricLabelStyle: React.CSSProperties = {
   fontSize: 11,
   letterSpacing: '0.08em',
   textTransform: 'uppercase',
-  color: '#94a3b8',
+  color: '#9ca3af',
 }
 
 export const sidebarMetricValueStyle: React.CSSProperties = {
@@ -116,7 +119,7 @@ export const navSectionStyle: React.CSSProperties = {
 export const navSectionTitleStyle: React.CSSProperties = {
   fontSize: 12,
   fontWeight: 800,
-  color: '#cbd5e1',
+  color: '#e5e7eb',
   letterSpacing: '0.08em',
   textTransform: 'uppercase',
 }
@@ -128,18 +131,18 @@ export const navListStyle: React.CSSProperties = {
 
 export const navButtonStyle: React.CSSProperties = {
   display: 'grid',
-  gap: 6,
-  padding: '14px 14px 13px',
+  gap: 7,
+  padding: '15px 15px 14px',
   borderRadius: 18,
   textAlign: 'left',
   cursor: 'pointer',
   transition: 'all 0.2s ease',
-  color: '#e2e8f0',
+  color: '#f3f4f6',
 }
 
 export const navEyebrowStyle: React.CSSProperties = {
   fontSize: 11,
-  color: '#38bdf8',
+  color: '#d1d5db',
   letterSpacing: '0.08em',
   textTransform: 'uppercase',
 }
@@ -153,44 +156,47 @@ export const navLabelStyle: React.CSSProperties = {
 export const navDescStyle: React.CSSProperties = {
   fontSize: 12,
   lineHeight: 1.6,
-  color: '#94a3b8',
+  color: '#9ca3af',
 }
 
 export const contentStyle: React.CSSProperties = {
   display: 'grid',
-  gap: 18,
+  gap: 20,
   overflowY: 'auto',
   maxHeight: '100vh',
-  paddingBottom: 20,
+  paddingBottom: 28,
 }
 
 export const heroStyle: React.CSSProperties = {
   display: 'grid',
   gridTemplateColumns: 'minmax(0, 1.2fr) minmax(320px, 0.9fr)',
-  gap: 18,
-  padding: 24,
-  borderRadius: 30,
-  background: 'linear-gradient(135deg, rgba(15,23,42,0.92) 0%, rgba(15,23,42,0.95) 35%, rgba(30,41,59,0.95) 100%)',
-  border: '1px solid rgba(51,65,85,0.8)',
-  boxShadow: '0 28px 80px rgba(2,8,23,0.42)',
+  gap: 20,
+  padding: 28,
+  borderRadius: 28,
+  background: `
+    radial-gradient(circle at top, rgba(255,255,255,0.04) 0%, rgba(17,24,39,0) 22%),
+    linear-gradient(135deg, rgba(12,14,18,0.98) 0%, rgba(16,18,22,0.98) 40%, rgba(20,22,27,0.98) 100%)
+  `,
+  border: '1px solid rgba(255,255,255,0.08)',
+  boxShadow: '0 30px 90px rgba(0,0,0,0.42), inset 0 1px 0 rgba(255,255,255,0.05)',
 }
 
 export const heroPillStyle: React.CSSProperties = {
   display: 'inline-flex',
   alignItems: 'center',
   gap: 8,
-  padding: '6px 10px',
+  padding: '7px 12px',
   borderRadius: 999,
   fontSize: 12,
   fontWeight: 800,
-  color: '#bae6fd',
-  background: 'rgba(14,165,233,0.14)',
-  border: '1px solid rgba(14,165,233,0.18)',
+  color: '#e5e7eb',
+  background: 'rgba(255,255,255,0.05)',
+  border: '1px solid rgba(255,255,255,0.08)',
 }
 
 export const heroTitleStyle: React.CSSProperties = {
   margin: '14px 0 0',
-  fontSize: 34,
+  fontSize: 38,
   lineHeight: 1.05,
   color: '#f8fafc',
   letterSpacing: '-0.03em',
@@ -200,7 +206,7 @@ export const heroDescriptionStyle: React.CSSProperties = {
   margin: '12px 0 0',
   fontSize: 15,
   lineHeight: 1.7,
-  color: '#94a3b8',
+  color: '#9ca3af',
   maxWidth: 760,
 }
 
@@ -214,17 +220,18 @@ export const heroRightGridStyle: React.CSSProperties = {
 export const heroMiniStatStyle: React.CSSProperties = {
   display: 'grid',
   gap: 6,
-  padding: '14px 16px',
-  borderRadius: 20,
-  background: 'linear-gradient(180deg, rgba(15,23,42,0.95) 0%, rgba(30,41,59,0.92) 100%)',
-  border: '1px solid rgba(71,85,105,0.55)',
+  padding: '16px 16px',
+  borderRadius: 18,
+  background: 'linear-gradient(180deg, rgba(18,21,28,0.96) 0%, rgba(12,15,20,0.92) 100%)',
+  border: '1px solid rgba(255,255,255,0.08)',
+  boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.03)',
 }
 
 export const heroMiniLabelStyle: React.CSSProperties = {
   fontSize: 11,
   textTransform: 'uppercase',
   letterSpacing: '0.08em',
-  color: '#94a3b8',
+  color: '#9ca3af',
 }
 
 export const heroMiniValueStyle: React.CSSProperties = {
@@ -239,11 +246,11 @@ export const sectionStackStyle: React.CSSProperties = {
 }
 
 export const darkPanelStyle: React.CSSProperties = {
-  padding: 18,
+  padding: 20,
   borderRadius: 24,
-  background: 'linear-gradient(180deg, rgba(15,23,42,0.88) 0%, rgba(2,6,23,0.92) 100%)',
-  border: '1px solid rgba(51,65,85,0.72)',
-  boxShadow: '0 18px 44px rgba(2,8,23,0.28)',
+  background: 'linear-gradient(180deg, rgba(15,17,22,0.96) 0%, rgba(10,12,16,0.98) 100%)',
+  border: '1px solid rgba(255,255,255,0.08)',
+  boxShadow: '0 24px 50px rgba(0,0,0,0.28), inset 0 1px 0 rgba(255,255,255,0.04)',
 }
 
 export const sectionTitleStyle: React.CSSProperties = {
@@ -256,17 +263,18 @@ export const sectionHintStyle: React.CSSProperties = {
   margin: '8px 0 0',
   fontSize: 13,
   lineHeight: 1.6,
-  color: '#94a3b8',
+  color: '#9ca3af',
 }
 
 export const strategyBannerStyle: React.CSSProperties = {
   display: 'grid',
   gridTemplateColumns: 'minmax(0, 1.15fr) minmax(320px, 0.85fr)',
   gap: 18,
-  padding: 20,
-  borderRadius: 26,
-  background: 'linear-gradient(135deg, rgba(30,41,59,0.98) 0%, rgba(30,64,175,0.85) 48%, rgba(15,118,110,0.82) 100%)',
-  border: '1px solid rgba(125,211,252,0.16)',
+  padding: 22,
+  borderRadius: 24,
+  background: 'linear-gradient(135deg, rgba(14,16,20,0.99) 0%, rgba(22,25,30,0.98) 40%, rgba(28,31,36,0.98) 100%)',
+  border: '1px solid rgba(255,255,255,0.08)',
+  boxShadow: '0 22px 54px rgba(0,0,0,0.25)',
 }
 
 export const bannerTitleStyle: React.CSSProperties = {
@@ -280,7 +288,7 @@ export const bannerTextStyle: React.CSSProperties = {
   margin: '10px 0 0',
   fontSize: 14,
   lineHeight: 1.7,
-  color: 'rgba(226,232,240,0.85)',
+  color: 'rgba(229,231,235,0.82)',
 }
 
 export const bannerStatGridStyle: React.CSSProperties = {
@@ -301,4 +309,10 @@ export const twoColBalancedStyle: React.CSSProperties = {
   gridTemplateColumns: '1fr 1fr',
   gap: 16,
   alignItems: 'start',
+}
+
+export const rightRailStackStyle: React.CSSProperties = {
+  display: 'grid',
+  gap: 16,
+  alignContent: 'start',
 }

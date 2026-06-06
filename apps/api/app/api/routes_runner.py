@@ -1,10 +1,19 @@
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field, field_validator
 from typing import Literal
 
 from app.core.rate_limit import limiter
-from app.services.strategy_runner import get_runner_logs, get_runner_status, resume_runner, run_strategy_cycle, set_runner_enabled
+from app.services.strategy_runner import (
+    get_runner_logs,
+    get_runner_status,
+    reset_runner_runtime_state,
+    resume_runner,
+    run_strategy_cycle,
+    set_runner_enabled,
+)
 from app.core.state import PAPER_BROKER
+from app.services.contract_metrics import reset_drawdown_tracker
+from app.services.auth_service import AuthenticationError, require_operation_token
 
 router = APIRouter()
 
@@ -13,6 +22,7 @@ Symbol = str
 DataSource = Literal["mock", "gate"]
 StrategyType = Literal["classic", "turtle", "ict"]
 TradeMode = Literal["paper", "live"]
+DirectionMode = Literal["auto", "long_only", "short_only"]
 
 
 class RunnerRequest(BaseModel):
@@ -23,7 +33,8 @@ class RunnerRequest(BaseModel):
     timeframe: Timeframe = "15m"
     data_source: DataSource = "gate"
     trade_mode: TradeMode = "paper"
-    leverage: int = Field(default=5, ge=1, le=20)
+    direction_mode: DirectionMode = "auto"
+    leverage: int = Field(default=5, ge=1, le=100)
     allocated_margin: float = Field(default=1000, gt=0)
 
     # Classic strategy params
@@ -48,6 +59,8 @@ class RunnerRequest(BaseModel):
     kdj_oversold: float = Field(default=20, ge=0, le=50)
     min_signal_score: int = Field(default=3, ge=1, le=10)
     churn_guard_enabled: bool = False
+    classic_trend_filter_enabled: bool = False
+    classic_cooldown_bars: int = Field(default=0, ge=0, le=100)
 
     # Turtle strategy params
     turtle_entry_period: int = Field(default=20, ge=5, le=100)
@@ -79,6 +92,7 @@ class RunnerRequest(BaseModel):
     risk_per_trade_pct: float = Field(default=0.01, gt=0, le=0.1)
     fee_rate: float = Field(default=0.00015, ge=0, le=0.01)
     slippage_rate: float = Field(default=0.0001, ge=0, le=0.01)
+    operation_token: str | None = None
 
     @field_validator("symbols")
     @classmethod
@@ -93,6 +107,7 @@ class RunnerToggleRequest(BaseModel):
     enabled: bool
     symbols: list[Symbol] | None = None
     trade_mode: TradeMode = "paper"
+    operation_token: str | None = None
 
     @field_validator("symbols")
     @classmethod
@@ -106,6 +121,11 @@ class RunnerToggleRequest(BaseModel):
 @router.post("/run-once")
 @limiter.limit("10/minute")
 def run_once(request: Request, payload: RunnerRequest):
+    if payload.trade_mode == "live":
+        try:
+            require_operation_token(payload.operation_token, "runner_live_trade")
+        except AuthenticationError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
     return run_strategy_cycle(payload.model_dump())
 
 
@@ -122,6 +142,12 @@ def status():
 @router.post("/toggle")
 @limiter.limit("10/minute")
 def toggle(request: Request, payload: RunnerToggleRequest):
+    if payload.enabled:
+        action = "runner_toggle_live" if payload.trade_mode == "live" else "runner_toggle"
+        try:
+            require_operation_token(payload.operation_token, action)
+        except AuthenticationError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
     return set_runner_enabled(payload.enabled, payload.symbols, trade_mode=payload.trade_mode)
 
 
@@ -134,4 +160,6 @@ def resume(request: Request):
 @router.post("/reset-paper")
 @limiter.limit("10/minute")
 def reset_paper(request: Request):
+    reset_drawdown_tracker()
+    reset_runner_runtime_state(trade_mode="paper")
     return PAPER_BROKER.reset()
