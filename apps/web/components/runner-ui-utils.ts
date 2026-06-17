@@ -91,7 +91,7 @@ export function formatSelectedPresetRuntimeSummary(params: {
   turtleEntryPeriod?: number
   turtleExitPeriod?: number
   turtleAtrPeriod?: number
-  strategyType?: 'classic' | 'turtle' | 'ict'
+  strategyType?: 'classic' | 'turtle' | 'ict' | 'macd_trend'
 }) {
   const details = params.strategyType === 'turtle'
     ? ` | Entry ${params.turtleEntryPeriod ?? '-'} | Exit ${params.turtleExitPeriod ?? '-'} | ATR ${params.turtleAtrPeriod ?? '-'}`
@@ -103,13 +103,15 @@ export function formatSelectedPresetRuntimeSummary(params: {
 export function formatStrategySlotCardSummary(params: {
   symbols: Array<'BTC_USDT' | 'ETH_USDT'>
   timeframe: '5m' | '15m' | '30m' | '1h' | '4h'
-  strategyType: 'classic' | 'turtle' | 'ict'
+  strategyType: 'classic' | 'turtle' | 'ict' | 'macd_trend'
 }) {
   const strategyTypeLabel = params.strategyType === 'turtle'
     ? '海龟'
     : params.strategyType === 'ict'
       ? 'ICT三周期'
-      : '经典'
+      : params.strategyType === 'macd_trend'
+        ? 'MACD趋势'
+        : '经典'
 
   return `${params.symbols.join(' / ')} | ${params.timeframe} | ${strategyTypeLabel}`
 }

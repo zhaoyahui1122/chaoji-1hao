@@ -1,6 +1,32 @@
 import { expect, test } from '@playwright/test'
 
-import { authedGet, loginToDashboard } from './helpers'
+import { authedGet, authedPost, loginToDashboard } from './helpers'
+
+async function seedClosedPaperPosition(request: any) {
+  const orderResp = await authedPost(request, '/paper/order', {
+    symbol: 'BTC_USDT',
+    side: 'long',
+    price: 64000,
+    leverage: 5,
+    allocated_margin: 100,
+    stop_loss_price: 62720,
+    source: 'manual',
+  })
+  const orderData = await orderResp.json()
+  expect(orderData?.ok).toBeTruthy()
+
+  const positionId = orderData?.order?.position_id
+  expect(positionId).toBeTruthy()
+
+  const closeResp = await authedPost(request, '/paper/close', {
+    symbol: 'BTC_USDT',
+    price: 64600,
+    position_id: positionId,
+    source: 'manual',
+  })
+  const closeData = await closeResp.json()
+  expect(closeData?.ok).toBeTruthy()
+}
 
 test.describe('trade_mode 历史记录过滤', () => {
   test('默认 paper 模式下历史记录 API 携带 trade_mode=paper', async ({ page }) => {
@@ -29,6 +55,8 @@ test.describe('trade_mode 历史记录过滤', () => {
   })
 
   test('后端 API 过滤正确性验证', async ({ request }) => {
+    await seedClosedPaperPosition(request)
+
     const paperRes = await authedGet(request, '/history/positions?trade_mode=paper')
     const paperData = await paperRes.json()
     expect(paperData.count).toBeGreaterThan(0)

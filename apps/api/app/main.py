@@ -1,5 +1,9 @@
 import os
 
+from dotenv import load_dotenv
+if os.environ.get("QUANT_GATE_SKIP_DOTENV", "").strip().lower() not in {"1", "true", "yes", "on"}:
+    load_dotenv()
+
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse

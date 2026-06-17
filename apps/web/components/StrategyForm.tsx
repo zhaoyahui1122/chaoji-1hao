@@ -6,6 +6,8 @@ import type { BacktestRunSettings, StrategyConfig, StrategyPriceReference } from
 import { buildBacktestSelectionKey, diffDaysInclusive, getBacktestDraft, resolveBacktestRunSelection, setBacktestDraft, type BacktestDraftState } from './backtest-date-utils'
 import { getStrategySnapshots, rollbackStrategy } from '../lib/api'
 import { formatStrategySlotCardSummary } from './runner-ui-utils'
+import { Button } from './ui/button'
+import { Input } from './ui/input'
 
 type Props = {
   initial: StrategyConfig
@@ -139,7 +141,7 @@ export default function StrategyForm({ initial, onSave, onRunBacktest, onInvalid
     } catch { /* ignore */ }
   }
 
-  const strategyTypeLabel = form.strategy_type === 'turtle' ? '海龟策略' : form.strategy_type === 'ict' ? 'ICT三周期策略' : '经典策略'
+  const strategyTypeLabel = form.strategy_type === 'turtle' ? '海龟策略' : form.strategy_type === 'ict' ? 'ICT三周期策略' : form.strategy_type === 'macd_trend' ? 'MACD趋势策略' : '经典策略'
 
   const signalSummary = useMemo(() => {
     if (form.strategy_type === 'turtle') {
@@ -148,6 +150,14 @@ export default function StrategyForm({ initial, onSave, onRunBacktest, onInvalid
     }
     if (form.strategy_type === 'ict') {
       return `ICT(4h BOS ${form.ict_bos_lookback ?? 20} / 1h FVG / 15m 吞没, 1:${form.ict_risk_reward ?? 2.5})`
+    }
+    if (form.strategy_type === 'macd_trend') {
+      const parts: string[] = []
+      if (form.macd_trend_enabled !== false) parts.push(`趋势突破(${form.macd_breakout_lookback ?? 20})`)
+      if (form.macd_divergence_enabled !== false) parts.push(`背离(${form.macd_divergence_confirm_lookback ?? 10})`)
+      parts.push(`超时${form.macd_signal_expiry ?? 20}根`)
+      parts.push(`跟踪止损${form.macd_trailing_stop_pct ?? 2}%`)
+      return parts.join(' ｜ ')
     }
     const enabled: string[] = []
     if (form.use_boll) enabled.push(`布林(${form.boll_period}, ${form.boll_std})`)
@@ -297,13 +307,13 @@ export default function StrategyForm({ initial, onSave, onRunBacktest, onInvalid
   }))
 
   return (
-    <div style={{ display: 'grid', gap: 14 }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'flex-start', flexWrap: 'wrap' }}>
-        <div style={{ display: 'grid', gap: 12, flex: 1, minWidth: 280 }}>
-          <div style={sectionTitleStyle}>策略参数面板</div>
-          <div style={{ display: 'grid', gap: 10 }}>
-            <div style={{ fontSize: 12, color: '#9ca3af', textTransform: 'uppercase', letterSpacing: '0.08em' }}>策略槽位</div>
-            <div style={slotCardGridStyle}>
+    <div className="grid gap-3.5">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="grid min-w-[280px] flex-1 gap-3">
+          <div className="text-[13px] font-extrabold text-text-primary">策略参数面板</div>
+          <div className="grid gap-2.5">
+            <div className="text-xs uppercase tracking-[0.08em] text-text-muted">策略槽位</div>
+            <div className="grid grid-cols-[repeat(auto-fit,minmax(180px,1fr))] gap-2.5">
               {slotCards.map((slot) => {
                 const active = slot.slotId === strategySlotId
                 const locked = slot.locked ?? false
@@ -312,47 +322,49 @@ export default function StrategyForm({ initial, onSave, onRunBacktest, onInvalid
                     key={slot.slotId}
                     type="button"
                     onClick={() => onStrategySlotChange?.(slot.slotId)}
-                    style={{
-                      ...slotCardStyle,
-                    background: active ? 'linear-gradient(135deg, #1b1e24 0%, #2a2e35 100%)' : locked ? 'linear-gradient(135deg, #3a2f1f 0%, #4b3d27 100%)' : 'linear-gradient(180deg, rgba(17,20,27,0.96) 0%, rgba(12,15,20,0.98) 100%)',
-                      color: '#f9fafb',
-                      border: active ? '1px solid rgba(34,211,238,0.3)' : locked ? '1px solid rgba(245,158,11,0.32)' : '1px solid rgba(255,255,255,0.08)',
-                      boxShadow: active ? '0 8px 18px rgba(0,0,0,0.14)' : locked ? '0 6px 14px rgba(0,0,0,0.12)' : 'none',
-                    }}
+                    className={`grid gap-1 rounded-2xl p-3 text-left text-text-primary transition-all duration-200 ${
+                      active
+                        ? 'border border-accent-cyan/30 bg-gradient-to-br from-[#1b1e24] to-[#2a2e35] shadow-lg'
+                        : locked
+                          ? 'border border-accent-amber/30 bg-gradient-to-br from-[#3a2f1f] to-[#4b3d27] shadow-md'
+                          : 'border border-white/8 bg-gradient-to-b from-white/[0.04] to-white/[0.02]'
+                    }`}
                   >
-                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'center' }}>
-                      <strong style={{ fontSize: 14 }}>{slot.name || `策略 ${slot.slotId}`}</strong>
-                      <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-                        {locked ? <span style={{ fontSize: 14 }}>🔒</span> : null}
-                        <span style={{ ...slotPillStyle, background: active ? 'rgba(255,255,255,0.12)' : locked ? 'rgba(255,255,255,0.08)' : 'rgba(255,255,255,0.06)', color: '#e5e7eb' }}>#{slot.slotId}</span>
+                    <div className="flex items-center justify-between gap-2">
+                      <strong className="text-sm">{slot.name || `策略 ${slot.slotId}`}</strong>
+                      <div className="flex items-center gap-1.5">
+                        {locked ? <span className="text-sm">🔒</span> : null}
+                        <span className={`rounded-full px-2 py-1 text-[11px] font-extrabold ${
+                          active ? 'bg-white/12 text-text-secondary' : locked ? 'bg-white/8 text-text-secondary' : 'bg-white/6 text-text-secondary'
+                        }`}>#{slot.slotId}</span>
                       </div>
                     </div>
-                    <div style={{ fontSize: 12, color: active ? 'rgba(255,255,255,0.78)' : '#d1d5db', lineHeight: 1.65, marginTop: 8 }}>
-                      {(slot.config.symbols ?? [slot.config.symbol]).join(' / ')} · {slot.config.timeframe} · {slot.config.strategy_type === 'turtle' ? '海龟' : slot.config.strategy_type === 'ict' ? 'ICT三周期' : '经典'}
+                    <div className={`mt-2 text-xs leading-relaxed ${active ? 'text-white/78' : 'text-text-secondary'}`}>
+                      {(slot.config.symbols ?? [slot.config.symbol]).join(' / ')} · {slot.config.timeframe} · {slot.config.strategy_type === 'turtle' ? '海龟' : slot.config.strategy_type === 'ict' ? 'ICT三周期' : slot.config.strategy_type === 'macd_trend' ? 'MACD趋势' : '经典'}
                     </div>
-                    <div style={{ fontSize: 11, color: active ? 'rgba(255,255,255,0.62)' : '#8b949e', lineHeight: 1.55, marginTop: 2 }}>
+                    <div className={`mt-0.5 text-[11px] leading-snug ${active ? 'text-white/62' : 'text-text-muted'}`}>
                       实际杠杆以交易工作区选择为准
                     </div>
-                    <div style={{ fontSize: 12, color: active ? 'rgba(255,255,255,0.72)' : '#9ca3af', lineHeight: 1.65, marginTop: 4 }}>
+                    <div className={`mt-1 text-xs leading-relaxed ${active ? 'text-white/72' : 'text-text-muted'}`}>
                       SL {(slot.config.stop_loss_pct * 100).toFixed(2)}% ｜ TP {(slot.config.take_profit_pct * 100).toFixed(2)}% ｜ Risk {(slot.config.risk_per_trade_pct * 100).toFixed(2)}%
                     </div>
                     {slot.config.strategy_type === 'turtle' ? (
-                      <div style={{ fontSize: 12, color: active ? 'rgba(255,255,255,0.72)' : '#9ca3af', lineHeight: 1.65, marginTop: 4 }}>
+                      <div className={`mt-1 text-xs leading-relaxed ${active ? 'text-white/72' : 'text-text-muted'}`}>
                         Entry {slot.config.turtle_entry_period} ｜ Exit {slot.config.turtle_exit_period} ｜ ATR {slot.config.turtle_atr_period ?? '-'} ｜ ATR Filter {slot.config.turtle_atr_filter ?? '-'}
                       </div>
                     ) : null}
                     {slot.config.strategy_type === 'turtle' ? (
-                      <div style={{ fontSize: 12, color: active ? 'rgba(255,255,255,0.72)' : '#9ca3af', lineHeight: 1.65, marginTop: 4 }}>
+                      <div className={`mt-1 text-xs leading-relaxed ${active ? 'text-white/72' : 'text-text-muted'}`}>
                         ADX {slot.config.turtle_adx_period ?? '-'} ｜ Threshold {slot.config.turtle_adx_threshold ?? '-'} ｜ Mode {slot.config.turtle_force_mode || '-'} ｜ Fee {slot.config.fee_rate ?? '-'} ｜ Slippage {slot.config.slippage_rate ?? '-'}
                       </div>
                     ) : null}
                     {slot.config.strategy_type === 'ict' ? (
-                      <div style={{ fontSize: 12, color: active ? 'rgba(255,255,255,0.72)' : '#9ca3af', lineHeight: 1.65, marginTop: 4 }}>
+                      <div className={`mt-1 text-xs leading-relaxed ${active ? 'text-white/72' : 'text-text-muted'}`}>
                         BOS {slot.config.ict_bos_lookback ?? 20} ｜ RR 1:{slot.config.ict_risk_reward ?? 2.5} ｜ 4h BOS + 1h FVG + 15m 吞没
                       </div>
                     ) : null}
                     {locked ? (
-                      <div style={{ fontSize: 11, color: active ? 'rgba(255,255,255,0.65)' : '#92400e', lineHeight: 1.65, marginTop: 6, fontStyle: 'italic' }}>
+                      <div className={`mt-1.5 text-[11px] leading-relaxed italic ${active ? 'text-white/65' : 'text-accent-amber'}`}>
                         🔒 优化参数已锁定
                       </div>
                     ) : null}
@@ -362,27 +374,27 @@ export default function StrategyForm({ initial, onSave, onRunBacktest, onInvalid
             </div>
           </div>
 
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-            <button type="button" onClick={handleAddSlot} style={{ ...buttonStyle('linear-gradient(135deg, #20232a 0%, #2b3038 100%)'), padding: '10px 14px' }}>
+          <div className="flex flex-wrap gap-2">
+            <Button variant="secondary" size="sm" onClick={handleAddSlot}>
               添加策略
-            </button>
-            <button type="button" onClick={handleDeleteSlot} disabled={strategySlots.length <= 1 || isLocked} style={{ ...buttonStyle('linear-gradient(135deg, #dc2626 0%, #ef4444 100%)'), padding: '10px 14px', opacity: strategySlots.length <= 1 || isLocked ? 0.55 : 1, cursor: strategySlots.length <= 1 || isLocked ? 'not-allowed' : 'pointer' }}>
+            </Button>
+            <Button variant="destructive" size="sm" onClick={handleDeleteSlot} disabled={strategySlots.length <= 1 || isLocked}>
               {isLocked ? '🔒 锁定策略' : '删除当前策略'}
-            </button>
+            </Button>
           </div>
 
-          <label style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: 12, color: '#d1d5db', flexWrap: 'wrap' }}>
+          <label className="flex flex-wrap items-center gap-1.5 text-xs text-text-secondary">
             <span>保存策略名称</span>
-            <input
+            <Input
               value={slotNameDraft}
               onChange={(e) => setSlotNameDraft(e.target.value)}
               onBlur={() => onStrategySlotNameChange?.(strategySlotId, slotNameDraft)}
               placeholder={`策略 ${strategySlotId}`}
-              style={{ padding: '8px 10px', borderRadius: 10, border: '1px solid rgba(255,255,255,0.08)', background: 'rgba(8,10,14,0.9)', color: '#f9fafb', minWidth: 220 }}
+              className="min-w-[220px]"
             />
           </label>
-          <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
-            <span style={{ fontSize: 12, color: '#d1d5db', fontWeight: 700 }}>Runner 交易对</span>
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="text-xs font-bold text-text-secondary">Runner 交易对</span>
             {(['BTC_USDT', 'ETH_USDT'] as const).map((sym) => {
               const active = (form.symbols ?? [form.symbol]).includes(sym)
               return (
@@ -401,16 +413,9 @@ export default function StrategyForm({ initial, onSave, onRunBacktest, onInvalid
                     }
                     update('symbols' as any, next as any)
                   }}
-                  style={{
-                    padding: '8px 14px',
-                    borderRadius: 999,
-                    border: 0,
-                    background: active ? 'linear-gradient(135deg, #2a2e35 0%, #363b44 100%)' : 'rgba(255,255,255,0.06)',
-                    color: '#f9fafb',
-                    fontWeight: 800,
-                    fontSize: 13,
-                    cursor: 'pointer',
-                  }}
+                  className={`rounded-full border-0 px-3.5 py-2 text-[13px] font-extrabold text-text-primary ${
+                    active ? 'bg-gradient-to-br from-[#2a2e35] to-[#363b44]' : 'bg-white/6'
+                  }`}
                 >
                   {sym === 'BTC_USDT' ? 'BTC' : 'ETH'}
                 </button>
@@ -418,40 +423,40 @@ export default function StrategyForm({ initial, onSave, onRunBacktest, onInvalid
             })}
           </div>
         </div>
-        <button type="button" onClick={() => setCollapsed((prev) => !prev)} style={{ ...buttonStyle('rgba(255,255,255,0.08)'), color: '#f9fafb', boxShadow: 'none' }}>
+        <Button variant="outline" size="sm" onClick={() => setCollapsed((prev) => !prev)}>
           {collapsed ? '展开参数' : '收起参数'}
-        </button>
+        </Button>
       </div>
 
-      {saveNotice ? <div style={saveNoticeStyle}>{saveNotice}</div> : null}
-      {backtestNotice ? <div style={{ ...saveNoticeStyle, background: 'linear-gradient(135deg, #dcfce7 0%, #bbf7d0 100%)', color: '#166534', border: '1px solid rgba(34,197,94,0.2)' }}>{backtestNotice}</div> : null}
+      {saveNotice ? (
+        <div className="rounded-[14px] border border-accent-green/26 bg-accent-green/15 px-3 py-2.5 text-xs font-bold text-accent-green shadow-lg">
+          {saveNotice}
+        </div>
+      ) : null}
+      {backtestNotice ? (
+        <div className="rounded-[14px] border border-accent-green/20 bg-gradient-to-br from-green-100 to-green-200 px-3 py-2.5 text-xs font-bold text-green-800 shadow-lg">
+          {backtestNotice}
+        </div>
+      ) : null}
       {hasStaleBacktestResult ? (
-        <div style={{ ...saveNoticeStyle, background: 'linear-gradient(135deg, #fef3c7 0%, #fde68a 100%)', color: '#92400e', border: '1px solid rgba(245,158,11,0.28)' }}>
-          回测参数已变更，下方结果仍是上一次回测的数据，请重新点击“运行回测”刷新。
+        <div className="rounded-[14px] border border-accent-amber/30 bg-gradient-to-br from-amber-100 to-amber-200 px-3 py-2.5 text-xs font-bold text-amber-800 shadow-lg">
+          回测参数已变更，下方结果仍是上一次回测的数据，请重新点击"运行回测"刷新。
         </div>
       ) : null}
 
       {isLocked ? (
-        <div style={{
-          padding: '12px 16px',
-          borderRadius: 14,
-          background: 'linear-gradient(135deg, #fef3c7 0%, #fde68a 100%)',
-          border: '1px solid rgba(245,158,11,0.35)',
-          display: 'flex',
-          alignItems: 'center',
-          gap: 10,
-        }}>
-          <span style={{ fontSize: 18 }}>🔒</span>
+        <div className="flex items-center gap-2.5 rounded-[14px] border border-accent-amber/35 bg-gradient-to-br from-amber-100 to-amber-200 px-4 py-3">
+          <span className="text-lg">🔒</span>
           <div>
-            <div style={{ fontWeight: 800, color: '#92400e', fontSize: 13 }}>策略参数已锁定</div>
-            <div style={{ fontSize: 12, color: '#a16207', marginTop: 2 }}>此策略使用优化后的15分钟海龟参数（ADX 35+趋势过滤），不允许修改或删除。如需自定义策略，请添加新策略槽。</div>
+            <div className="text-[13px] font-extrabold text-amber-800">策略参数已锁定</div>
+            <div className="mt-0.5 text-xs text-amber-700">此策略使用优化后的15分钟海龟参数（ADX 35+趋势过滤），不允许修改或删除。如需自定义策略，请添加新策略槽。</div>
           </div>
         </div>
       ) : null}
 
       {collapsed ? (
-        <div style={sectionStyle}>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 10 }}>
+        <div className="grid gap-3 rounded-[20px] border border-white/8 bg-bg-card p-4 shadow-lg">
+          <div className="grid grid-cols-[repeat(auto-fit,minmax(160px,1fr))] gap-2.5">
             <ValueMetric label="策略类型" valueText={strategyTypeLabel} />
             <ValueMetric label="已启用信号" valueText={signalSummary} />
             {form.strategy_type === 'turtle' ? (
@@ -471,6 +476,13 @@ export default function StrategyForm({ initial, onSave, onRunBacktest, onInvalid
                 <ValueMetric label="BOS 回看" valueText={String(form.ict_bos_lookback ?? 20)} />
                 <ValueMetric label="风险回报比" valueText={`1:${form.ict_risk_reward ?? 2.5}`} />
               </>
+            ) : form.strategy_type === 'macd_trend' ? (
+              <>
+                <ValueMetric label="信号超时" valueText={`${form.macd_signal_expiry ?? 20} 根`} />
+                <ValueMetric label="跟踪止损" valueText={`${form.macd_trailing_stop_pct ?? 2}%`} />
+                <ValueMetric label="衰减基数" valueText={String(form.macd_trailing_decay_base ?? 0.98)} />
+                <ValueMetric label="衰减下限" valueText={String(form.macd_trailing_decay_floor ?? 0.3)} />
+              </>
             ) : (
               <>
                 <ValueMetric label="止损" valueText={`${(form.stop_loss_pct * 100).toFixed(2)}%`} tone="danger" />
@@ -487,23 +499,23 @@ export default function StrategyForm({ initial, onSave, onRunBacktest, onInvalid
 
           {priceReference && priceReference.symbol === form.symbol ? (
             form.strategy_type === 'ict' ? (
-              <div style={priceReferenceCardStyle}>
-                <div style={{ fontSize: 13, color: '#059669', lineHeight: 1.7 }}>
+              <div className="grid gap-2.5 rounded-[18px] border border-accent-cyan/18 bg-gradient-to-b from-[#111924]/98 to-[#0c1118] p-3.5 shadow-lg">
+                <div className="text-[13px] leading-relaxed text-accent-green">
                   ICT 策略的止损止盈由 1h FVG 边界和 1:{form.ict_risk_reward ?? 2.5} 风险回报比决定，执行时由后端实时计算。
                 </div>
               </div>
             ) : (
-              <div style={priceReferenceCardStyle}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap', alignItems: 'center' }}>
+              <div className="grid gap-2.5 rounded-[18px] border border-accent-cyan/18 bg-gradient-to-b from-[#111924]/98 to-[#0c1118] p-3.5 shadow-lg">
+                <div className="flex flex-wrap items-center justify-between gap-3">
                   <div>
-                    <div style={sectionTitleStyle}>实时参考价</div>
-                  <div style={{ marginTop: 4, fontSize: 12, color: '#9ca3af' }}>
+                    <div className="text-[13px] font-extrabold text-text-primary">实时参考价</div>
+                    <div className="mt-1 text-xs text-text-muted">
                       {priceReference.symbol} · {priceReference.timeframe} · 默认按 long 口径推导止损止盈
                     </div>
                   </div>
-                  <div style={{ fontSize: 12, color: '#d1d5db' }}>止损比例：{(priceReference.stop_loss_pct * 100).toFixed(2)}% · 止盈比例：{(priceReference.take_profit_pct * 100).toFixed(2)}%</div>
+                  <div className="text-xs text-text-secondary">止损比例：{(priceReference.stop_loss_pct * 100).toFixed(2)}% · 止盈比例：{(priceReference.take_profit_pct * 100).toFixed(2)}%</div>
                 </div>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 10, marginTop: 12 }}>
+                <div className="mt-3 grid grid-cols-[repeat(auto-fit,minmax(160px,1fr))] gap-2.5">
                   <PriceMetric label="当前实时价" value={priceReference.live_price} />
                   <PriceMetric label="当前标记价" value={priceReference.mark_price} />
                   <PriceMetric label="默认 Entry" value={priceReference.default_entry_price} />
@@ -514,19 +526,19 @@ export default function StrategyForm({ initial, onSave, onRunBacktest, onInvalid
             )
           ) : null}
 
-          <div style={sectionStyle}>
-            <div style={sectionTitleStyle}>信号参数</div>
+          <div className="grid gap-3 rounded-[20px] border border-white/8 bg-bg-card p-4 shadow-lg">
+            <div className="text-[13px] font-extrabold text-text-primary">信号参数</div>
 
             {form.strategy_type === 'turtle' ? (
-              <div style={indicatorCardStyle}>
-                <div style={{ display: 'grid', gap: 4 }}>
-                  <strong style={{ fontSize: 14, color: '#f9fafb' }}>海龟策略参数</strong>
-                  <div style={{ fontSize: 12, color: '#9ca3af' }}>突破入场、回撤退出、ATR 波动过滤。</div>
-                  <div style={{ fontSize: 12, color: '#1d4ed8', background: 'rgba(37,99,235,0.08)', border: '1px solid rgba(37,99,235,0.12)', borderRadius: 10, padding: '8px 10px' }}>
+              <div className="grid gap-3 rounded-[18px] border border-white/8 bg-bg-card p-3.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
+                <div className="grid gap-1">
+                  <strong className="text-sm text-text-primary">海龟策略参数</strong>
+                  <div className="text-xs text-text-muted">突破入场、回撤退出、ATR 波动过滤。</div>
+                  <div className="rounded-[10px] border border-accent-blue/12 bg-accent-blue/8 px-2.5 py-2 text-xs text-accent-blue">
                     当前已切换为海龟策略，经典指标参数不会参与本次信号计算。
                   </div>
                 </div>
-                <div style={indicatorFieldsGridStyle}>
+                <div className="grid grid-cols-[repeat(auto-fit,minmax(180px,1fr))] gap-3">
                   <FieldRow label="入场周期" type="number" value={form.turtle_entry_period} onChange={(v) => update('turtle_entry_period', Number(v))} disabled={isLocked} />
                   <FieldRow label="出场周期" type="number" value={form.turtle_exit_period} onChange={(v) => update('turtle_exit_period', Number(v))} disabled={isLocked} />
                   <FieldRow label="ATR 周期" type="number" value={form.turtle_atr_period} onChange={(v) => update('turtle_atr_period', Number(v))} disabled={isLocked} />
@@ -538,17 +550,54 @@ export default function StrategyForm({ initial, onSave, onRunBacktest, onInvalid
                 </div>
               </div>
             ) : form.strategy_type === 'ict' ? (
-              <div style={indicatorCardStyle}>
-                <div style={{ display: 'grid', gap: 4 }}>
-                  <strong style={{ fontSize: 14, color: '#f9fafb' }}>ICT 三周期策略参数</strong>
-                  <div style={{ fontSize: 12, color: '#9ca3af' }}>4h BOS 趋势过滤 + 1h FVG 区域 + 15m 吞没入场。</div>
-                  <div style={{ fontSize: 12, color: '#059669', background: 'rgba(5,150,105,0.08)', border: '1px solid rgba(5,150,105,0.12)', borderRadius: 10, padding: '8px 10px' }}>
+              <div className="grid gap-3 rounded-[18px] border border-white/8 bg-bg-card p-3.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
+                <div className="grid gap-1">
+                  <strong className="text-sm text-text-primary">ICT 三周期策略参数</strong>
+                  <div className="text-xs text-text-muted">4h BOS 趋势过滤 + 1h FVG 区域 + 15m 吞没入场。</div>
+                  <div className="rounded-[10px] border border-accent-green/12 bg-accent-green/8 px-2.5 py-2 text-xs text-accent-green">
                     ICT 策略自动拉取 4h / 1h / 15m 三组数据，止损止盈由 FVG 边界和风险回报比决定。
                   </div>
                 </div>
-                <div style={indicatorFieldsGridStyle}>
+                <div className="grid grid-cols-[repeat(auto-fit,minmax(180px,1fr))] gap-3">
                   <FieldRow label="BOS 回看周期" type="number" value={form.ict_bos_lookback ?? 20} onChange={(v) => update('ict_bos_lookback' as any, Number(v))} disabled={isLocked} />
                   <FieldRow label="风险回报比" type="number" step="0.1" value={form.ict_risk_reward ?? 2.5} onChange={(v) => update('ict_risk_reward' as any, Number(v))} disabled={isLocked} />
+                </div>
+              </div>
+            ) : form.strategy_type === 'macd_trend' ? (
+              <div className="grid gap-3 rounded-[18px] border border-white/8 bg-bg-card p-3.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
+                <div className="grid gap-1">
+                  <strong className="text-sm text-text-primary">MACD 趋势 + 背离策略参数</strong>
+                  <div className="text-xs text-text-muted">MACD 金叉/死叉趋势突破 + 价格-MACD 背离反转，动态跟踪止损出场。</div>
+                  <div className="rounded-[10px] border border-accent-cyan/12 bg-accent-cyan/8 px-2.5 py-2 text-xs text-accent-cyan">
+                    只用 MACD 一个指标。信号超时自动失效，不会死扛。无固定止盈，靠跟踪止损让利润奔跑。
+                  </div>
+                </div>
+                <div className="grid grid-cols-[repeat(auto-fit,minmax(180px,1fr))] gap-3">
+                  <FieldRow label="MACD 快线" type="number" value={form.macd_fast ?? 12} onChange={(v) => update('macd_fast', Number(v))} disabled={isLocked} />
+                  <FieldRow label="MACD 慢线" type="number" value={form.macd_slow ?? 26} onChange={(v) => update('macd_slow', Number(v))} disabled={isLocked} />
+                  <FieldRow label="MACD 信号线" type="number" value={form.macd_signal ?? 9} onChange={(v) => update('macd_signal', Number(v))} disabled={isLocked} />
+                </div>
+                <div className="grid grid-cols-[repeat(auto-fit,minmax(180px,1fr))] gap-3">
+                  <IndicatorToggleCard title="趋势突破" checked={form.macd_trend_enabled !== false} onToggle={(checked) => update('macd_trend_enabled' as any, checked)} hint="金叉/死叉后价格突破前N根K线高低点开仓。">
+                    <FieldRow label="突破回看周期" type="number" value={form.macd_breakout_lookback ?? 20} onChange={(v) => update('macd_breakout_lookback' as any, Number(v))} disabled={isLocked || form.macd_trend_enabled === false} />
+                  </IndicatorToggleCard>
+                  <IndicatorToggleCard title="背离反转" checked={form.macd_divergence_enabled !== false} onToggle={(checked) => update('macd_divergence_enabled' as any, checked)} hint="价格与MACD背离时准备反转信号。">
+                    <FieldRow label="背离确认周期" type="number" value={form.macd_divergence_confirm_lookback ?? 10} onChange={(v) => update('macd_divergence_confirm_lookback' as any, Number(v))} disabled={isLocked || form.macd_divergence_enabled === false} />
+                  </IndicatorToggleCard>
+                </div>
+                <div className="grid grid-cols-[repeat(auto-fit,minmax(180px,1fr))] gap-3">
+                  <FieldRow label="信号超时（根K线）" type="number" value={form.macd_signal_expiry ?? 20} onChange={(v) => update('macd_signal_expiry' as any, Number(v))} disabled={isLocked} />
+                  <FieldRow label="跟踪止损比例(%)" type="number" step="0.1" value={form.macd_trailing_stop_pct ?? 2.0} onChange={(v) => update('macd_trailing_stop_pct' as any, Number(v))} disabled={isLocked} />
+                </div>
+                <div className="grid gap-3 rounded-[18px] border border-white/8 bg-bg-card p-3.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
+                  <div className="grid gap-1">
+                    <strong className="text-sm text-text-primary">动态衰减系数</strong>
+                    <div className="text-xs text-text-muted">持仓越久止损越紧，锁住利润。衰减基数越小衰减越快，下限决定止损最紧能到原始的百分之几。</div>
+                  </div>
+                  <div className="grid grid-cols-[repeat(auto-fit,minmax(180px,1fr))] gap-3">
+                    <FieldRow label="衰减基数" type="number" step="0.01" value={form.macd_trailing_decay_base ?? 0.98} onChange={(v) => update('macd_trailing_decay_base' as any, Number(v))} disabled={isLocked} />
+                    <FieldRow label="衰减下限" type="number" step="0.05" value={form.macd_trailing_decay_floor ?? 0.3} onChange={(v) => update('macd_trailing_decay_floor' as any, Number(v))} disabled={isLocked} />
+                  </div>
                 </div>
               </div>
             ) : (
@@ -559,7 +608,7 @@ export default function StrategyForm({ initial, onSave, onRunBacktest, onInvalid
                   onToggle={(checked) => update('use_boll', checked)}
                   hint="勾上后才参与信号判断，并开放参数填写。"
                 >
-                  <div style={indicatorFieldsGridStyle}>
+                  <div className="grid grid-cols-[repeat(auto-fit,minmax(180px,1fr))] gap-3">
                     <FieldRow label="布林周期" type="number" value={form.boll_period} onChange={(v) => update('boll_period', Number(v))} disabled={!form.use_boll} />
                     <FieldRow label="布林标准差" type="number" step="0.1" value={form.boll_std} onChange={(v) => update('boll_std', Number(v))} disabled={!form.use_boll} />
                   </div>
@@ -571,7 +620,7 @@ export default function StrategyForm({ initial, onSave, onRunBacktest, onInvalid
                   onToggle={(checked) => update('use_rsi', checked)}
                   hint="勾上后才参与信号判断，并开放参数填写。"
                 >
-                  <div style={indicatorFieldsGridStyle}>
+                  <div className="grid grid-cols-[repeat(auto-fit,minmax(180px,1fr))] gap-3">
                     <FieldRow label="RSI 周期" type="number" value={form.rsi_period} onChange={(v) => update('rsi_period', Number(v))} disabled={!form.use_rsi} />
                     <FieldRow label="RSI 超卖" type="number" value={form.rsi_oversold} onChange={(v) => update('rsi_oversold', Number(v))} disabled={!form.use_rsi} />
                     <FieldRow label="RSI 超买" type="number" value={form.rsi_overbought} onChange={(v) => update('rsi_overbought', Number(v))} disabled={!form.use_rsi} />
@@ -584,7 +633,7 @@ export default function StrategyForm({ initial, onSave, onRunBacktest, onInvalid
                   onToggle={(checked) => update('use_ma', checked)}
                   hint="勾上后才参与信号判断，并开放参数填写。"
                 >
-                  <div style={indicatorFieldsGridStyle}>
+                  <div className="grid grid-cols-[repeat(auto-fit,minmax(180px,1fr))] gap-3">
                     <FieldRow label="EMA 快线" type="number" value={form.ma_short} onChange={(v) => update('ma_short', Number(v))} disabled={!form.use_ma} />
                     <FieldRow label="EMA 慢线" type="number" value={form.ma_long} onChange={(v) => update('ma_long', Number(v))} disabled={!form.use_ma} />
                   </div>
@@ -596,7 +645,7 @@ export default function StrategyForm({ initial, onSave, onRunBacktest, onInvalid
                   onToggle={(checked) => update('use_macd', checked)}
                   hint="勾上后会要求 MACD 同向确认趋势强弱。"
                 >
-                  <div style={indicatorFieldsGridStyle}>
+                  <div className="grid grid-cols-[repeat(auto-fit,minmax(180px,1fr))] gap-3">
                     <FieldRow label="MACD 快线" type="number" value={form.macd_fast ?? 12} onChange={(v) => update('macd_fast', Number(v))} disabled={!(form.use_macd ?? false)} />
                     <FieldRow label="MACD 慢线" type="number" value={form.macd_slow ?? 26} onChange={(v) => update('macd_slow', Number(v))} disabled={!(form.use_macd ?? false)} />
                     <FieldRow label="MACD 信号线" type="number" value={form.macd_signal ?? 9} onChange={(v) => update('macd_signal', Number(v))} disabled={!(form.use_macd ?? false)} />
@@ -609,7 +658,7 @@ export default function StrategyForm({ initial, onSave, onRunBacktest, onInvalid
                   onToggle={(checked) => update('use_kdj', checked)}
                   hint="勾上后会要求 KDJ 在超买超卖区给出方向确认。"
                 >
-                  <div style={indicatorFieldsGridStyle}>
+                  <div className="grid grid-cols-[repeat(auto-fit,minmax(180px,1fr))] gap-3">
                     <FieldRow label="KDJ 周期" type="number" value={form.kdj_period ?? 9} onChange={(v) => update('kdj_period', Number(v))} disabled={!(form.use_kdj ?? false)} />
                     <FieldRow label="KDJ 信号周期" type="number" value={form.kdj_signal_period ?? 3} onChange={(v) => update('kdj_signal_period', Number(v))} disabled={!(form.use_kdj ?? false)} />
                     <FieldRow label="KDJ 超卖" type="number" value={form.kdj_oversold ?? 20} onChange={(v) => update('kdj_oversold', Number(v))} disabled={!(form.use_kdj ?? false)} />
@@ -617,12 +666,12 @@ export default function StrategyForm({ initial, onSave, onRunBacktest, onInvalid
                   </div>
                 </IndicatorToggleCard>
 
-                <div style={indicatorCardStyle}>
-                  <div style={{ display: 'grid', gap: 4 }}>
-                    <strong style={{ fontSize: 14, color: '#f9fafb' }}>评分触发阈值</strong>
-                    <div style={{ fontSize: 12, color: '#9ca3af' }}>分数越低越容易触发，适合提升 15m 交易频率。</div>
+                <div className="grid gap-3 rounded-[18px] border border-white/8 bg-bg-card p-3.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
+                  <div className="grid gap-1">
+                    <strong className="text-sm text-text-primary">评分触发阈值</strong>
+                    <div className="text-xs text-text-muted">分数越低越容易触发，适合提升 15m 交易频率。</div>
                   </div>
-                  <div style={indicatorFieldsGridStyle}>
+                  <div className="grid grid-cols-[repeat(auto-fit,minmax(180px,1fr))] gap-3">
                     <FieldRow label="最小信号分" type="number" value={form.min_signal_score ?? 3} onChange={(v) => update('min_signal_score', Number(v))} />
                   </div>
                 </div>
@@ -633,17 +682,17 @@ export default function StrategyForm({ initial, onSave, onRunBacktest, onInvalid
                   onToggle={(checked) => update('classic_trend_filter_enabled', checked)}
                   hint="开启后，经典策略只顺着短均线/长均线方向入场：多单要求短均线不低于长均线，空单要求短均线不高于长均线。"
                 >
-                  <div style={{ fontSize: 12, color: '#d1d5db', lineHeight: 1.7 }}>
+                  <div className="text-xs leading-relaxed text-text-secondary">
                     这能减少震荡区逆势追单，超级一号默认开启。
                   </div>
                 </IndicatorToggleCard>
 
-                <div style={indicatorCardStyle}>
-                  <div style={{ display: 'grid', gap: 4 }}>
-                    <strong style={{ fontSize: 14, color: '#f9fafb' }}>入场冷却</strong>
-                    <div style={{ fontSize: 12, color: '#9ca3af' }}>平仓后等待指定根 K 线再允许下一次经典策略开仓，防止刚止损/止盈后立刻反复进场。</div>
+                <div className="grid gap-3 rounded-[18px] border border-white/8 bg-bg-card p-3.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
+                  <div className="grid gap-1">
+                    <strong className="text-sm text-text-primary">入场冷却</strong>
+                    <div className="text-xs text-text-muted">平仓后等待指定根 K 线再允许下一次经典策略开仓，防止刚止损/止盈后立刻反复进场。</div>
                   </div>
-                  <div style={indicatorFieldsGridStyle}>
+                  <div className="grid grid-cols-[repeat(auto-fit,minmax(180px,1fr))] gap-3">
                     <FieldRow label="冷却K线数" type="number" value={form.classic_cooldown_bars ?? 0} onChange={(v) => update('classic_cooldown_bars', Math.min(100, Math.max(0, Number(v) || 0)))} disabled={isLocked} />
                   </div>
                 </div>
@@ -654,7 +703,7 @@ export default function StrategyForm({ initial, onSave, onRunBacktest, onInvalid
                   onToggle={(checked) => update('churn_guard_enabled', checked)}
                   hint="开启后，如果价格离当前持仓开仓价的波动还很小，就先拦截 reverse_signal，避免震荡里来回反手。"
                 >
-                  <div style={{ fontSize: 12, color: '#d1d5db', lineHeight: 1.7 }}>
+                  <div className="text-xs leading-relaxed text-text-secondary">
                     触发逻辑：当反向信号出现，但当前价格距离开仓价的波动仍低于一个小阈值时，Runner 会跳过这次反手。
                   </div>
                 </IndicatorToggleCard>
@@ -662,8 +711,8 @@ export default function StrategyForm({ initial, onSave, onRunBacktest, onInvalid
             )}
           </div>
 
-          <div style={sectionStyle}>
-            <div style={sectionTitleStyle}>风控参数</div>
+          <div className="grid gap-3 rounded-[20px] border border-white/8 bg-bg-card p-4 shadow-lg">
+            <div className="text-[13px] font-extrabold text-text-primary">风控参数</div>
             {!isLocked ? (
               <>
                 <FieldRow label="止损比例" type="number" step="0.001" value={form.stop_loss_pct} onChange={(v) => update('stop_loss_pct', Number(v))} disabled={isLocked} />
@@ -671,136 +720,110 @@ export default function StrategyForm({ initial, onSave, onRunBacktest, onInvalid
                 <FieldRow label="单笔风险比例" type="number" step="0.001" value={form.risk_per_trade_pct} onChange={(v) => update('risk_per_trade_pct', Number(v))} disabled={isLocked} />
               </>
             ) : (
-              <div style={{ fontSize: 12, color: '#9ca3af', lineHeight: 1.7 }}>锁定策略不展示风控参数明细。</div>
+              <div className="text-xs leading-relaxed text-text-muted">锁定策略不展示风控参数明细。</div>
             )}
           </div>
         </>
       ) : null}
 
-      <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
-        <button type="button" onClick={handleSave} disabled={saving || isLocked} style={{
-          ...buttonStyle(isLocked ? 'linear-gradient(135deg, #4b5563 0%, #374151 100%)' : 'linear-gradient(135deg, #20232a 0%, #2b3038 100%)'),
-          cursor: isLocked ? 'not-allowed' : 'pointer',
-        }}>
+      <div className="flex flex-wrap items-center gap-3">
+        <Button
+          variant={isLocked ? 'secondary' : 'default'}
+          size="sm"
+          onClick={handleSave}
+          disabled={saving || isLocked}
+        >
           {isLocked ? '🔒 策略已锁定' : saving ? '保存中...' : `保存策略 ${strategySlotId}`}
-        </button>
-        <button type="button" onClick={loadSnapshots} style={{
-          ...buttonStyle('linear-gradient(135deg, #1f2937 0%, #374151 100%)'),
-          padding: '8px 14px',
-          fontSize: 13,
-        }}>
+        </Button>
+        <Button variant="outline" size="sm" onClick={loadSnapshots}>
           历史版本
-        </button>
-        {rollbackNotice ? <span style={{ fontSize: 13, color: '#166534', fontWeight: 700 }}>{rollbackNotice}</span> : null}
+        </Button>
+        {rollbackNotice ? <span className="text-[13px] font-bold text-accent-green">{rollbackNotice}</span> : null}
         {showSnapshots && snapshots.length > 0 && (
-          <div style={{ position: 'relative', display: 'inline-block' }}>
-            <select
-              onChange={(e) => { const id = Number(e.target.value); if (id) handleRollback(id) }}
-              defaultValue=""
-              style={{ padding: '8px 12px', borderRadius: 8, border: '1px solid rgba(255,255,255,0.08)', fontSize: 13, background: 'rgba(8,10,14,0.9)', color: '#f9fafb' }}
-            >
-              <option value="" disabled>选择版本回滚...</option>
-              {snapshots.map(s => (
-                <option key={s.id} value={s.id}>
-                  #{s.id} {s.label || ''} {new Date(s.created_at).toLocaleString()}
-                </option>
-              ))}
-            </select>
-          </div>
+          <select
+            onChange={(e) => { const id = Number(e.target.value); if (id) handleRollback(id) }}
+            defaultValue=""
+            className="rounded-lg border border-white/8 bg-bg-input px-3 py-2 text-[13px] text-text-primary"
+          >
+            <option value="" disabled>选择版本回滚...</option>
+            {snapshots.map(s => (
+              <option key={s.id} value={s.id}>
+                #{s.id} {s.label || ''} {new Date(s.created_at).toLocaleString()}
+              </option>
+            ))}
+          </select>
         )}
         {showSnapshots && snapshots.length === 0 && (
-          <span style={{ fontSize: 12, color: '#9ca3af' }}>暂无历史版本</span>
+          <span className="text-xs text-text-muted">暂无历史版本</span>
         )}
-        <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
-          <span style={{ fontSize: 12, color: '#d1d5db', fontWeight: 700 }}>交易对</span>
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span className="text-xs font-bold text-text-secondary">交易对</span>
           {(['BTC_USDT', 'ETH_USDT'] as const).map((sym) => (
-            <button
+            <Button
               key={sym}
-              type="button"
+              variant={backtestSymbol === sym ? 'secondary' : 'outline'}
+              size="sm"
               onClick={() => setBacktestSymbol(sym)}
-              style={{
-                ...buttonStyle(backtestSymbol === sym ? 'linear-gradient(135deg, #2a2e35 0%, #363b44 100%)' : 'rgba(15,23,42,0.08)'),
-                color: '#f9fafb',
-                boxShadow: 'none',
-                padding: '8px 14px',
-                fontSize: 13,
-              }}
             >
               {sym === 'BTC_USDT' ? 'BTC' : 'ETH'}
-            </button>
+            </Button>
           ))}
         </div>
-        <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-          <span style={{ fontSize: 12, color: '#d1d5db', fontWeight: 700 }}>杠杆</span>
-          <input
+        <div className="flex items-center gap-1.5">
+          <span className="text-xs font-bold text-text-secondary">杠杆</span>
+          <Input
             type="number"
             min={10}
             max={150}
             step={5}
             value={backtestLeverage}
             onChange={(e) => setBacktestLeverage(Math.min(150, Math.max(10, Number(e.target.value) || 10)))}
-            style={{
-              width: 64,
-              padding: '8px 6px',
-              borderRadius: 8,
-              border: '1px solid rgba(255,255,255,0.08)',
-              fontSize: 13,
-              textAlign: 'center',
-              background: 'rgba(8,10,14,0.9)',
-              color: '#f9fafb',
-            }}
+            className="w-16 text-center"
           />
-          <span style={{ fontSize: 13, color: '#9ca3af' }}>x</span>
+          <span className="text-[13px] text-text-muted">x</span>
         </div>
-        <div style={{ display: 'grid', gap: 10 }}>
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-            <span style={{ fontSize: 12, color: '#d1d5db', fontWeight: 700 }}>回测周期</span>
+        <div className="grid gap-2.5">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-xs font-bold text-text-secondary">回测周期</span>
             {QUICK_BACKTEST_DAYS.map((days) => (
-              <button
+              <Button
                 key={days}
-                type="button"
+                variant={backtestDays === days ? 'secondary' : 'outline'}
+                size="sm"
                 onClick={() => applyQuickRange(days)}
                 disabled={running}
-                style={{
-                  ...buttonStyle(backtestDays === days ? 'linear-gradient(135deg, #2a2e35 0%, #363b44 100%)' : 'rgba(15,23,42,0.08)'),
-                  color: '#f9fafb',
-                  boxShadow: 'none',
-                  padding: '10px 14px',
-                  opacity: running ? 0.7 : 1,
-                }}
+                className={running ? 'opacity-70' : ''}
               >
                 最近 {days} 天
-              </button>
+              </Button>
             ))}
           </div>
-          <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', flexWrap: 'wrap' }}>
-            <label htmlFor={BACKTEST_START_DATE_INPUT_ID} style={{ display: 'grid', gap: 6 }}>
-              <span style={{ fontSize: 12, color: '#9ca3af', fontWeight: 700 }}>开始日期</span>
-              <input
+          <div className="flex flex-wrap items-end gap-2">
+            <label htmlFor={BACKTEST_START_DATE_INPUT_ID} className="grid gap-1.5">
+              <span className="text-xs font-bold text-text-muted">开始日期</span>
+              <Input
                 id={BACKTEST_START_DATE_INPUT_ID}
                 type="date"
                 value={backtestStartDate}
                 onChange={(e) => handleBacktestStartDateChange(e.target.value)}
                 max={backtestEndDate || undefined}
-                style={{ padding: '10px 12px', borderRadius: 10, border: '1px solid rgba(255,255,255,0.08)', background: 'rgba(8,10,14,0.9)', color: '#f9fafb' }}
               />
             </label>
-            <label htmlFor={BACKTEST_END_DATE_INPUT_ID} style={{ display: 'grid', gap: 6 }}>
-              <span style={{ fontSize: 12, color: '#9ca3af', fontWeight: 700 }}>结束日期</span>
-              <input
+            <label htmlFor={BACKTEST_END_DATE_INPUT_ID} className="grid gap-1.5">
+              <span className="text-xs font-bold text-text-muted">结束日期</span>
+              <Input
                 id={BACKTEST_END_DATE_INPUT_ID}
                 type="date"
                 value={backtestEndDate}
                 onChange={(e) => handleBacktestEndDateChange(e.target.value)}
                 min={backtestStartDate || undefined}
-                style={{ padding: '10px 12px', borderRadius: 10, border: '1px solid rgba(255,255,255,0.08)', background: 'rgba(8,10,14,0.9)', color: '#f9fafb' }}
               />
             </label>
-            <button type="button" onClick={handleRunBacktest} disabled={running} style={buttonStyle('linear-gradient(135deg, #2563eb 0%, #38bdf8 100%)')}>
+            <Button variant="default" size="sm" onClick={handleRunBacktest} disabled={running}>
               {running ? '回测中...' : '运行回测'}
-            </button>
+            </Button>
           </div>
-          <div style={{ fontSize: 12, color: '#9ca3af' }}>
+          <div className="text-xs text-text-muted">
             支持自然日范围，包含结束日，最大 365 天。填写日期后将优先按日期区间回测。
           </div>
         </div>
@@ -811,38 +834,54 @@ export default function StrategyForm({ initial, onSave, onRunBacktest, onInvalid
 
 function IndicatorToggleCard({ title, checked, onToggle, hint, children }: { title: string; checked: boolean; onToggle: (checked: boolean) => void; hint: string; children: React.ReactNode }) {
   return (
-    <div style={indicatorCardStyle}>
-      <label style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, cursor: 'pointer', flexWrap: 'wrap' }}>
-        <div style={{ display: 'grid', gap: 4 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <input type="checkbox" checked={checked} onChange={(e) => onToggle(e.target.checked)} style={{ width: 18, height: 18 }} />
-            <strong style={{ fontSize: 14, color: '#f9fafb' }}>{title}</strong>
+    <div className="grid gap-3 rounded-[18px] border border-white/8 bg-bg-card p-3.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
+      <label className="flex cursor-pointer flex-wrap items-center justify-between gap-3">
+        <div className="grid gap-1">
+          <div className="flex items-center gap-2.5">
+            <input type="checkbox" checked={checked} onChange={(e) => onToggle(e.target.checked)} className="h-[18px] w-[18px]" />
+            <strong className="text-sm text-text-primary">{title}</strong>
           </div>
-          <div style={{ fontSize: 12, color: '#9ca3af' }}>{hint}</div>
+          <div className="text-xs text-text-muted">{hint}</div>
         </div>
-        <span style={{ ...toggleStatePillStyle, background: checked ? 'rgba(34,197,94,0.14)' : 'rgba(255,255,255,0.08)', color: checked ? '#4ade80' : '#d1d5db' }}>
+        <span className={`rounded-full px-2 py-1 text-[11px] font-extrabold ${
+          checked ? 'bg-accent-green/14 text-accent-green' : 'bg-white/8 text-text-secondary'
+        }`}>
           {checked ? '已启用' : '未启用'}
         </span>
       </label>
-      <div style={{ opacity: checked ? 1 : 0.55 }}>{children}</div>
+      <div className={checked ? 'opacity-100' : 'opacity-55'}>{children}</div>
     </div>
   )
 }
 
 function FieldRow({ label, type = 'text', step, value, onChange, disabled = false }: { label: string; type?: string; step?: string; value: string | number; onChange: (value: string) => void; disabled?: boolean }) {
   return (
-    <label style={{ display: 'grid', gap: 6 }}>
-      <span style={{ fontSize: 12, color: '#9ca3af', textTransform: 'uppercase', letterSpacing: '0.08em' }}>{label}</span>
-      <input type={type} step={step} disabled={disabled} value={value} onChange={(e) => onChange(e.target.value)} style={{ padding: '12px 14px', borderRadius: 14, border: '1px solid rgba(255,255,255,0.08)', background: disabled ? 'rgba(55,65,81,0.45)' : 'rgba(8,10,14,0.9)', color: disabled ? '#6b7280' : '#f9fafb', boxShadow: 'inset 0 1px 2px rgba(0,0,0,0.18)' }} />
+    <label className="grid gap-1.5">
+      <span className="text-xs uppercase tracking-[0.08em] text-text-muted">{label}</span>
+      <Input
+        type={type}
+        step={step}
+        disabled={disabled}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="rounded-[14px] px-3.5 py-3 shadow-[inset_0_1px_2px_rgba(0,0,0,0.18)]"
+      />
     </label>
   )
 }
 
 function SelectRow({ label, value, onChange, options, disabled = false }: { label: string; value: string; onChange: (value: string) => void; options: Array<string | { value: string; label: string }>; disabled?: boolean }) {
   return (
-    <label style={{ display: 'grid', gap: 6 }}>
-      <span style={{ fontSize: 12, color: '#9ca3af', textTransform: 'uppercase', letterSpacing: '0.08em' }}>{label}</span>
-      <select value={value} onChange={(e) => onChange(e.target.value)} disabled={disabled} style={{ padding: '12px 14px', borderRadius: 14, border: '1px solid rgba(255,255,255,0.08)', background: disabled ? 'rgba(55,65,81,0.45)' : 'rgba(8,10,14,0.9)', color: disabled ? '#6b7280' : '#f9fafb', cursor: disabled ? 'not-allowed' : 'pointer' }}>
+    <label className="grid gap-1.5">
+      <span className="text-xs uppercase tracking-[0.08em] text-text-muted">{label}</span>
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        disabled={disabled}
+        className={`rounded-[14px] border border-white/8 px-3.5 py-3 text-text-primary shadow-[inset_0_1px_2px_rgba(0,0,0,0.18)] ${
+          disabled ? 'cursor-not-allowed bg-gray-700/45 text-gray-500' : 'cursor-pointer bg-bg-input'
+        }`}
+      >
         {options.map((opt) => {
           const normalized = typeof opt === 'string' ? { value: opt, label: opt } : opt
           return <option key={normalized.value} value={normalized.value}>{normalized.label}</option>
@@ -852,127 +891,24 @@ function SelectRow({ label, value, onChange, options, disabled = false }: { labe
   )
 }
 
-function buttonStyle(background: string): React.CSSProperties {
-  return {
-    padding: '12px 16px',
-    borderRadius: 14,
-    border: 0,
-    background,
-    color: background.includes('#f59e0b') || background.includes('#fbbf24') ? '#111827' : '#fff',
-    fontWeight: 800,
-    cursor: 'pointer',
-    boxShadow: '0 8px 18px rgba(0,0,0,0.14)',
-  }
-}
-
 function ValueMetric({ label, valueText, tone = 'neutral' }: { label: string; valueText: string; tone?: 'neutral' | 'danger' }) {
   return (
-    <div style={{
-      padding: 12,
-      borderRadius: 14,
-      background: tone === 'danger' ? 'rgba(69,10,10,0.5)' : 'rgba(17,20,27,0.92)',
-      border: tone === 'danger' ? '1px solid rgba(248,113,113,0.22)' : '1px solid rgba(255,255,255,0.08)',
-    }}>
-      <div style={{ fontSize: 12, color: '#9ca3af', textTransform: 'uppercase', letterSpacing: '0.08em' }}>{label}</div>
-      <div style={{ marginTop: 6, fontSize: 18, fontWeight: 800, color: tone === 'danger' ? '#fca5a5' : '#f9fafb' }}>{valueText}</div>
+    <div className={`rounded-[14px] border p-3 ${
+      tone === 'danger' ? 'border-accent-red/22 bg-red-950/50' : 'border-white/8 bg-bg-card'
+    }`}>
+      <div className="text-xs uppercase tracking-[0.08em] text-text-muted">{label}</div>
+      <div className={`mt-1.5 text-lg font-extrabold ${tone === 'danger' ? 'text-accent-red' : 'text-text-primary'}`}>{valueText}</div>
     </div>
   )
 }
 
 function PriceMetric({ label, value, tone = 'neutral' }: { label: string; value: number; tone?: 'neutral' | 'danger' }) {
   return (
-    <div style={{
-      padding: 12,
-      borderRadius: 14,
-      background: tone === 'danger' ? 'rgba(69,10,10,0.5)' : 'rgba(17,20,27,0.92)',
-      border: tone === 'danger' ? '1px solid rgba(248,113,113,0.22)' : '1px solid rgba(255,255,255,0.08)',
-    }}>
-      <div style={{ fontSize: 12, color: '#9ca3af', textTransform: 'uppercase', letterSpacing: '0.08em' }}>{label}</div>
-      <div style={{ marginTop: 6, fontSize: 18, fontWeight: 800, color: tone === 'danger' ? '#fca5a5' : '#f9fafb' }}>${value.toFixed(2)}</div>
+    <div className={`rounded-[14px] border p-3 ${
+      tone === 'danger' ? 'border-accent-red/22 bg-red-950/50' : 'border-white/8 bg-bg-card'
+    }`}>
+      <div className="text-xs uppercase tracking-[0.08em] text-text-muted">{label}</div>
+      <div className={`mt-1.5 text-lg font-extrabold ${tone === 'danger' ? 'text-accent-red' : 'text-text-primary'}`}>${value.toFixed(2)}</div>
     </div>
   )
-}
-
-const slotCardGridStyle: React.CSSProperties = {
-  display: 'grid',
-  gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
-  gap: 10,
-}
-
-const slotCardStyle: React.CSSProperties = {
-  display: 'grid',
-  gap: 4,
-  padding: 12,
-  borderRadius: 16,
-  textAlign: 'left',
-  cursor: 'pointer',
-  transition: 'all 0.2s ease',
-  background: 'linear-gradient(180deg, rgba(17,20,27,0.96) 0%, rgba(12,15,20,0.98) 100%)',
-}
-
-const slotPillStyle: React.CSSProperties = {
-  padding: '4px 8px',
-  borderRadius: 999,
-  fontSize: 11,
-  fontWeight: 800,
-}
-
-const sectionStyle: React.CSSProperties = {
-  display: 'grid',
-  gap: 12,
-  padding: 16,
-  borderRadius: 20,
-  background: 'linear-gradient(180deg, rgba(17,20,27,0.96) 0%, rgba(12,15,20,0.98) 100%)',
-  border: '1px solid rgba(255,255,255,0.08)',
-  boxShadow: '0 10px 24px rgba(0,0,0,0.12)',
-}
-
-const indicatorCardStyle: React.CSSProperties = {
-  display: 'grid',
-  gap: 12,
-  padding: 14,
-  borderRadius: 18,
-  background: 'linear-gradient(180deg, rgba(17,20,27,0.94) 0%, rgba(12,15,20,0.98) 100%)',
-  border: '1px solid rgba(255,255,255,0.08)',
-  boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.04)',
-}
-
-const indicatorFieldsGridStyle: React.CSSProperties = {
-  display: 'grid',
-  gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
-  gap: 12,
-}
-
-const toggleStatePillStyle: React.CSSProperties = {
-  padding: '4px 8px',
-  borderRadius: 999,
-  fontSize: 11,
-  fontWeight: 800,
-}
-
-const priceReferenceCardStyle: React.CSSProperties = {
-  display: 'grid',
-  gap: 10,
-  padding: 14,
-  borderRadius: 18,
-  background: 'linear-gradient(180deg, rgba(17,25,36,0.98) 0%, rgba(12,17,24,1) 100%)',
-  border: '1px solid rgba(34,211,238,0.18)',
-  boxShadow: '0 10px 24px rgba(0,0,0,0.12)',
-}
-
-const sectionTitleStyle: React.CSSProperties = {
-  fontSize: 13,
-  fontWeight: 800,
-  color: '#f9fafb',
-}
-
-const saveNoticeStyle: React.CSSProperties = {
-  padding: '11px 13px',
-  borderRadius: 14,
-  background: 'rgba(20,83,45,0.42)',
-  border: '1px solid rgba(34,197,94,0.26)',
-  color: '#bbf7d0',
-  fontSize: 12,
-  fontWeight: 700,
-  boxShadow: '0 10px 24px rgba(0,0,0,0.12)',
 }

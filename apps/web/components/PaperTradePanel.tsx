@@ -6,16 +6,20 @@ import { getContractInfo } from '../lib/api'
 import {
   buildPresetSyncedTradeState,
   canPauseRobot,
-  formatSelectedPresetRuntimeSummary,
   getRunnerStartBlockReasonAfterProbe,
   getTradeDirectionModeOptions,
   type TradeDirectionMode,
   validateStopLossAgainstLiquidation,
 } from './runner-ui-utils'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Badge } from '@/components/ui/badge'
+import { Label } from '@/components/ui/label'
 
 const DEFAULT_ACCOUNT_EQUITY = 1000
 
 type OpenMode = 'margin' | 'risk'
+type RunMode = 'manual' | 'auto'
 
 type OpenPayload = {
   symbol: 'BTC_USDT' | 'ETH_USDT'
@@ -37,7 +41,7 @@ type Props = {
   onMark: (payload: { symbol: 'BTC_USDT' | 'ETH_USDT'; mark_price: number; position_id?: string }) => Promise<void>
   onClose: (payload: { symbol: 'BTC_USDT' | 'ETH_USDT'; price: number; position_id?: string }) => Promise<void>
   onReset?: (initialBalance: number) => Promise<void>
-  onRunStrategyOnce?: (symbols?: Array<'BTC_USDT' | 'ETH_USDT'>, leverage?: number, tradeMode?: 'paper' | 'live', directionMode?: TradeDirectionMode) => Promise<unknown>
+  onRunStrategyOnce?: (symbols?: Array<'BTC_USDT' | 'ETH_USDT'>, leverage?: number, tradeMode?: 'paper' | 'live', directionMode?: TradeDirectionMode, dryRun?: boolean) => Promise<unknown>
   accountEquity?: number
   marketTickers?: Record<'BTC_USDT' | 'ETH_USDT', { last_price: number; mark_price: number } | null>
   positions?: Array<{ position_id?: string | null; symbol: 'BTC_USDT' | 'ETH_USDT'; side: 'long' | 'short'; entry_price: number; mark_price: number; qty: number; leverage: number; unrealized_pnl?: number }>
@@ -49,7 +53,7 @@ type Props = {
     config: {
       symbol: 'BTC_USDT' | 'ETH_USDT'
       symbols?: Array<'BTC_USDT' | 'ETH_USDT'> | null
-      strategy_type?: 'classic' | 'turtle' | 'ict'
+      strategy_type?: 'classic' | 'turtle' | 'ict' | 'macd_trend'
       leverage: number
       stop_loss_pct: number
       take_profit_pct: number
@@ -94,7 +98,9 @@ export default function PaperTradePanel({ onOpen, onMark, onClose, onReset, onRu
   const [selectedPositionId, setSelectedPositionId] = useState('')
   const [selectedStrategySlot, setSelectedStrategySlot] = useState('')
   const [syncWithStrategy] = useState(true)
+  const [runMode, setRunMode] = useState<RunMode>('auto')
   const [isStartingRobot, setIsStartingRobot] = useState(false)
+  const [isSubmittingOpen, setIsSubmittingOpen] = useState(false)
   const [isRobotRunning, setIsRobotRunning] = useState(false)
   const [robotFeedback, setRobotFeedback] = useState('')
   const [tradeActionFeedback, setTradeActionFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null)
@@ -118,12 +124,13 @@ export default function PaperTradePanel({ onOpen, onMark, onClose, onReset, onRu
     () => strategyPresets.find((item) => String(item.slotId) === selectedStrategySlot) || null,
     [selectedStrategySlot, strategyPresets],
   )
-  const formatStrategyTypeLabel = (strategyType?: 'classic' | 'turtle' | 'ict') => {
+  const formatStrategyTypeLabel = (strategyType?: 'classic' | 'turtle' | 'ict' | 'macd_trend') => {
     if (strategyType === 'turtle') return '海龟策略'
     if (strategyType === 'ict') return 'ICT 三周期'
+    if (strategyType === 'macd_trend') return 'MACD趋势'
     return '经典策略'
   }
-  const activeSymbol = selectedPreset?.config.symbol ?? symbol
+  const activeSymbol = runMode === 'manual' ? symbol : selectedPreset?.config.symbol ?? symbol
   const selectedStrategySummary = useMemo(() => {
     if (!selectedPreset) return null
     return [
@@ -290,6 +297,36 @@ export default function PaperTradePanel({ onOpen, onMark, onClose, onReset, onRu
     }
   }
 
+  async function handleOpenPosition() {
+    if (isSubmittingOpen) return
+    setIsSubmittingOpen(true)
+    setTradeActionFeedback(null)
+    try {
+      await onOpen({
+        symbol,
+        side,
+        price,
+        leverage,
+        allocated_margin: openMode === 'risk' && accountEquity > 0
+          ? Math.min(activePreview.effectiveAllocatedMargin, accountEquity * 0.19)
+          : activePreview.effectiveAllocatedMargin,
+        stop_loss_price: openMode === 'margin' ? stopLossPrice : derivedStopLossPrice,
+        qty: openMode === 'margin' && explicitQty > 0 ? explicitQty : undefined,
+        risk_per_trade_pct: openMode === 'risk' ? riskPerTradePct : undefined,
+        stop_loss_pct: openMode === 'risk' ? stopLossPct : undefined,
+        take_profit_pct: takeProfitPct,
+        fee_rate: feeRate,
+        slippage_rate: slippageRate,
+      })
+      setTradeActionFeedback({ type: 'success', message: '模拟开仓已提交。' })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      setTradeActionFeedback({ type: 'error', message: `模拟开仓失败：${message}` })
+    } finally {
+      setIsSubmittingOpen(false)
+    }
+  }
+
   async function handleClosePosition() {
     if (!selectedPosition || isSubmittingClose) return
     setIsSubmittingClose(true)
@@ -306,61 +343,57 @@ export default function PaperTradePanel({ onOpen, onMark, onClose, onReset, onRu
   }
 
   return (
-    <div style={{ display: 'grid', gap: 16 }}>
+    <div className="grid gap-4">
       {/* 实盘/模拟 选择器 */}
-      <div style={slotCardGridStyle}>
+      <div className="grid grid-cols-[repeat(auto-fit,minmax(180px,1fr))] gap-2.5">
         <button
           type="button"
           onClick={() => onTradeModeChange?.('live')}
           disabled={!liveConnected}
-          style={{
-            ...slotCardStyle,
-            background: tradeMode === 'live' ? 'linear-gradient(135deg, rgba(31,35,41,0.98) 0%, rgba(18,20,24,1) 100%)' : 'linear-gradient(180deg, rgba(15,17,22,0.92) 0%, rgba(10,12,16,0.94) 100%)',
-            color: tradeMode === 'live' ? '#fff' : liveConnected ? '#e2e8f0' : '#6b7280',
-            border: tradeMode === 'live' ? '1px solid rgba(255,255,255,0.12)' : liveConnected ? '1px solid rgba(255,255,255,0.08)' : '1px solid rgba(255,255,255,0.05)',
-            boxShadow: '0 12px 24px rgba(2,8,23,0.18)',
-            opacity: liveConnected ? 1 : 0.5,
-            cursor: liveConnected ? 'pointer' : 'not-allowed',
-          }}
+          className={`grid gap-1 p-3 rounded-2xl text-left cursor-pointer transition-all duration-200 shadow-[0_12px_24px_rgba(2,8,23,0.18)] ${
+            tradeMode === 'live'
+              ? 'bg-gradient-to-br from-[rgba(31,35,41,0.98)] to-[rgba(18,20,24,1)] text-white border border-white/12'
+              : liveConnected
+                ? 'bg-gradient-to-b from-[rgba(15,17,22,0.92)] to-[rgba(10,12,16,0.94)] text-text-primary border border-white/8'
+                : 'bg-gradient-to-b from-[rgba(15,17,22,0.92)] to-[rgba(10,12,16,0.94)] text-text-muted border border-white/5 opacity-50 cursor-not-allowed'
+          }`}
         >
-          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'center' }}>
-            <strong style={{ fontSize: 14 }}>实盘交易</strong>
-            <span style={{ ...slotPillStyle, background: 'rgba(255,255,255,0.08)', color: '#e5e7eb' }}>
+          <div className="flex justify-between gap-2 items-center">
+            <strong className="text-sm">实盘交易</strong>
+            <Badge variant="secondary" className="bg-white/8 text-gray-200 px-2 py-1 text-[11px] font-extrabold rounded-full">
               {liveConnected ? 'LIVE' : '未连接'}
-            </span>
+            </Badge>
           </div>
-          <div style={{ fontSize: 12, color: tradeMode === 'live' ? 'rgba(255,255,255,0.78)' : '#9ca3af', lineHeight: 1.65, marginTop: 8 }}>
+          <div className={`text-xs leading-relaxed mt-2 ${tradeMode === 'live' ? 'text-white/78' : 'text-text-muted'}`}>
             Gate.io 合约真实账户
           </div>
-          <div style={{ fontSize: 12, color: tradeMode === 'live' ? 'rgba(255,255,255,0.72)' : '#9ca3af', lineHeight: 1.65, marginTop: 4 }}>
+          <div className={`text-xs leading-relaxed mt-1 ${tradeMode === 'live' ? 'text-white/72' : 'text-text-muted'}`}>
             {liveConnected ? `权益 $${liveEquity.toFixed(2)} · ${livePositions.length} 持仓` : '请先在合约实盘账户中连接'}
           </div>
         </button>
         <button
           type="button"
           onClick={() => onTradeModeChange?.('paper')}
-          style={{
-            ...slotCardStyle,
-            background: tradeMode === 'paper' ? 'linear-gradient(135deg, rgba(31,35,41,0.98) 0%, rgba(18,20,24,1) 100%)' : 'linear-gradient(180deg, rgba(15,17,22,0.92) 0%, rgba(10,12,16,0.94) 100%)',
-            color: tradeMode === 'paper' ? '#fff' : '#e2e8f0',
-            border: tradeMode === 'paper' ? '1px solid rgba(255,255,255,0.12)' : '1px solid rgba(255,255,255,0.08)',
-            boxShadow: '0 12px 24px rgba(2,8,23,0.18)',
-          }}
+          className={`grid gap-1 p-3 rounded-2xl text-left cursor-pointer transition-all duration-200 shadow-[0_12px_24px_rgba(2,8,23,0.18)] ${
+            tradeMode === 'paper'
+              ? 'bg-gradient-to-br from-[rgba(31,35,41,0.98)] to-[rgba(18,20,24,1)] text-white border border-white/12'
+              : 'bg-gradient-to-b from-[rgba(15,17,22,0.92)] to-[rgba(10,12,16,0.94)] text-text-primary border border-white/8'
+          }`}
         >
-          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'center' }}>
-            <strong style={{ fontSize: 14 }}>模拟交易</strong>
-            <span style={{ ...slotPillStyle, background: 'rgba(255,255,255,0.08)', color: '#e5e7eb' }}>PAPER</span>
+          <div className="flex justify-between gap-2 items-center">
+            <strong className="text-sm">模拟交易</strong>
+            <Badge variant="secondary" className="bg-white/8 text-gray-200 px-2 py-1 text-[11px] font-extrabold rounded-full">PAPER</Badge>
           </div>
-          <div style={{ fontSize: 12, color: tradeMode === 'paper' ? 'rgba(255,255,255,0.78)' : '#9ca3af', lineHeight: 1.65, marginTop: 8 }}>
+          <div className={`text-xs leading-relaxed mt-2 ${tradeMode === 'paper' ? 'text-white/78' : 'text-text-muted'}`}>
             模拟纸面交易，无真实资金
           </div>
-          <div style={{ fontSize: 12, color: tradeMode === 'paper' ? 'rgba(255,255,255,0.72)' : '#9ca3af', lineHeight: 1.65, marginTop: 4 }}>
+          <div className={`text-xs leading-relaxed mt-1 ${tradeMode === 'paper' ? 'text-white/72' : 'text-text-muted'}`}>
             权益 ${accountEquity.toFixed(2)} · 策略驱动
           </div>
         </button>
         {onReset ? (
-          <button
-            type="button"
+          <Button
+            variant="outline"
             onClick={async () => {
               if (!window.confirm('确定要清除模拟历史并重置为 1000 USDT 吗？')) return
               try {
@@ -370,32 +403,22 @@ export default function PaperTradePanel({ onOpen, onMark, onClose, onReset, onRu
                 alert(`重置失败：${msg}`)
               }
             }}
-            style={{
-              padding: '8px 12px',
-              borderRadius: 12,
-              border: '1px solid rgba(255,255,255,0.08)',
-              background: 'rgba(255,255,255,0.04)',
-              color: '#d1d5db',
-              fontSize: 12,
-              fontWeight: 700,
-              cursor: 'pointer',
-              width: '100%',
-            }}
+            className="w-full p-3 rounded-2xl border border-white/8 bg-white/4 text-text-secondary text-xs font-bold cursor-pointer"
           >
             清除历史 · 重置 1000
-          </button>
+          </Button>
         ) : null}
       </div>
 
-      <div style={heroCardStyle}>
+      <div className="rounded-3xl p-5 bg-gradient-to-br from-[#121418] via-[#1a1d22] to-[#23272d] shadow-[0_14px_28px_rgba(0,0,0,0.16)] grid gap-[18px]">
         <div>
-          <div style={eyebrowStyle}>{tradeMode === 'live' ? 'Live Trading Console' : 'Paper Trading Console'}</div>
-          <h3 style={{ margin: '6px 0 0', fontSize: 24, letterSpacing: '-0.03em', color: '#f8fafc' }}>{tradeMode === 'live' ? '实盘交易执行台' : '模拟交易执行台'}</h3>
-          <p style={{ margin: '10px 0 0', color: 'rgba(226,232,240,0.88)', fontSize: 13, lineHeight: 1.6 }}>
+          <div className="text-[11px] text-text-secondary uppercase tracking-[0.08em]">{tradeMode === 'live' ? 'Live Trading Console' : 'Paper Trading Console'}</div>
+          <h3 className="mt-1.5 text-2xl tracking-[-0.03em] text-[#f8fafc]">{tradeMode === 'live' ? '实盘交易执行台' : '模拟交易执行台'}</h3>
+          <p className="mt-2.5 text-text-secondary text-[13px] leading-relaxed">
             {tradeMode === 'live' ? '连接真实 Gate.io 合约账户，策略自动执行真实交易。' : '只保留"选策略 → 按策略运行机器人"。开仓价、止盈止损、风险比例等参数统一以策略配置为准。'}
           </p>
         </div>
-        <div style={heroStatsGridStyle}>
+        <div className="grid grid-cols-[repeat(auto-fit,minmax(180px,1fr))] gap-3">
           <HeroStat label="账户权益" value={`$${(tradeMode === 'live' ? liveEquity : accountEquity).toFixed(2)}`} />
           <HeroStat label="当前模式" value={tradeMode === 'live' ? '实盘模式' : openMode === 'margin' ? '保证金模式' : '风险模式'} />
           <HeroStat label="预估名义价值" value={`$${activePreview.notional.toFixed(2)}`} />
@@ -403,22 +426,22 @@ export default function PaperTradePanel({ onOpen, onMark, onClose, onReset, onRu
         </div>
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1.5fr) minmax(320px, 0.9fr)', gap: 16, alignItems: 'start' }}>
-        <div style={{ display: 'grid', gap: 16 }}>
-          <div style={panelStyle}>
-            <div style={panelHeaderStyle}>
+      <div className="grid grid-cols-[minmax(0,1.5fr)_minmax(320px,0.9fr)] gap-4 items-start">
+        <div className="grid gap-4">
+          <div className="border border-white/8 rounded-[22px] bg-gradient-to-b from-[rgba(15,17,22,0.94)] to-[rgba(10,12,16,0.96)] shadow-[0_10px_24px_rgba(0,0,0,0.14)] p-[18px]">
+            <div className="flex justify-between gap-3 flex-wrap items-center mb-[14px]">
               <div>
-                <div style={panelEyebrowStyle}>Trade Setup</div>
-                <h4 style={panelTitleStyle}>策略运行</h4>
+                <div className="text-[11px] text-text-secondary uppercase tracking-[0.08em]">Trade Setup</div>
+                <h4 className="mt-1.5 text-lg font-extrabold tracking-[-0.02em] text-[#f8fafc]">策略运行</h4>
               </div>
-              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              <div className="flex gap-2 flex-wrap">
                 <ModeChip active>按策略自动参数</ModeChip>
               </div>
             </div>
 
-            <div style={{ display: 'grid', gap: 12 }}>
+            <div className="grid gap-3">
               {strategyPresets.length > 0 ? (
-                <div style={slotCardGridStyle}>
+                <div className="grid grid-cols-[repeat(auto-fit,minmax(180px,1fr))] gap-2.5">
                   {strategyPresets.map((item) => {
                     const active = String(item.slotId) === selectedStrategySlot
                     return (
@@ -429,25 +452,25 @@ export default function PaperTradePanel({ onOpen, onMark, onClose, onReset, onRu
                           setSelectedStrategySlot(String(item.slotId))
                           onSelectedStrategySlotChange?.(item.slotId)
                         }}
-                        style={{
-                          ...slotCardStyle,
-                          background: active ? 'linear-gradient(135deg, rgba(15,23,42,0.98) 0%, rgba(37,99,235,0.96) 100%)' : 'linear-gradient(180deg, rgba(15,23,42,0.92) 0%, rgba(2,6,23,0.94) 100%)',
-                          color: active ? '#fff' : '#e2e8f0',
-                          border: active ? '1px solid rgba(96,165,250,0.4)' : '1px solid rgba(51,65,85,0.78)',
-                          boxShadow: active ? '0 8px 18px rgba(0,0,0,0.14)' : '0 8px 18px rgba(0,0,0,0.12)',
-                        }}
+                        className={`grid gap-1 p-3 rounded-2xl text-left cursor-pointer transition-all duration-200 ${
+                          active
+                            ? 'bg-gradient-to-br from-[rgba(15,23,42,0.98)] to-[rgba(37,99,235,0.96)] text-white border border-blue-400/40 shadow-[0_8px_18px_rgba(0,0,0,0.14)]'
+                            : 'bg-gradient-to-b from-[rgba(15,23,42,0.92)] to-[rgba(2,6,23,0.94)] text-text-primary border border-slate-700/78 shadow-[0_8px_18px_rgba(0,0,0,0.12)]'
+                        }`}
                       >
-                        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'center' }}>
-                          <strong style={{ fontSize: 14 }}>{item.name}</strong>
-                          <span style={{ ...slotPillStyle, background: active ? 'rgba(255,255,255,0.16)' : 'rgba(14,165,233,0.14)', color: active ? '#dbeafe' : '#bae6fd' }}>#{item.slotId}</span>
+                        <div className="flex justify-between gap-2 items-center">
+                          <strong className="text-sm">{item.name}</strong>
+                          <Badge variant="secondary" className={`px-2 py-1 text-[11px] font-extrabold rounded-full ${active ? 'bg-white/16 text-blue-100' : 'bg-sky-500/14 text-sky-200'}`}>
+                            #{item.slotId}
+                          </Badge>
                         </div>
-                        <div style={{ fontSize: 12, color: active ? 'rgba(255,255,255,0.78)' : '#cbd5e1', lineHeight: 1.65, marginTop: 8 }}>
+                        <div className={`text-xs leading-relaxed mt-2 ${active ? 'text-white/78' : 'text-slate-300'}`}>
                           {formatStrategyTypeLabel(item.config.strategy_type)} · {item.config.symbol}
                         </div>
-                        <div style={{ fontSize: 11, color: active ? 'rgba(255,255,255,0.62)' : '#64748b', lineHeight: 1.55, marginTop: 2 }}>
+                        <div className={`text-[11px] leading-snug mt-0.5 ${active ? 'text-white/62' : 'text-slate-500'}`}>
                           实际杠杆以交易工作区选择为准
                         </div>
-                        <div style={{ fontSize: 12, color: active ? 'rgba(255,255,255,0.72)' : '#94a3b8', lineHeight: 1.65, marginTop: 4 }}>
+                        <div className={`text-xs leading-relaxed mt-1 ${active ? 'text-white/72' : 'text-slate-400'}`}>
                           {item.config.strategy_type === 'turtle'
                             ? `Entry ${item.config.turtle_entry_period ?? '-'} ｜ Exit ${item.config.turtle_exit_period ?? '-'} ｜ ATR ${item.config.turtle_atr_period ?? '-'}`
                             : `SL ${(item.config.stop_loss_pct * 100).toFixed(2)}% ｜ TP ${(item.config.take_profit_pct * 100).toFixed(2)}% ｜ Risk ${(item.config.risk_per_trade_pct * 100).toFixed(2)}%`}
@@ -461,27 +484,27 @@ export default function PaperTradePanel({ onOpen, onMark, onClose, onReset, onRu
             </div>
 
             {selectedPreset ? (
-              <div style={strategySummaryCardStyle}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+              <div className="rounded-[18px] p-4 bg-gradient-to-br from-[rgba(15,17,22,0.9)] to-[rgba(24,27,32,0.96)] border border-white/8 shadow-[0_8px_18px_rgba(0,0,0,0.12)]">
+                <div className="flex justify-between gap-3 items-center flex-wrap">
                   <div>
-                    <div style={panelEyebrowStyle}>已选策略</div>
-                    <h4 style={{ ...panelTitleStyle, marginTop: 4 }}>当前已选：{selectedPreset.name}（策略 {selectedPreset.slotId}）</h4>
+                    <div className="text-[11px] text-text-secondary uppercase tracking-[0.08em]">已选策略</div>
+                    <h4 className="mt-1 text-lg font-extrabold tracking-[-0.02em] text-[#f8fafc]">当前已选：{selectedPreset.name}（策略 {selectedPreset.slotId}）</h4>
                   </div>
-                  <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-                    <div style={strategySlotBadgeStyle}>关键字段已锁定</div>
+                  <div className="flex gap-2 items-center flex-wrap">
+                    <Badge variant="secondary" className="px-3 py-2 bg-white/6 text-gray-200 text-xs font-extrabold rounded-full">关键字段已锁定</Badge>
                   </div>
                 </div>
-                <div style={{ marginTop: 10, fontSize: 13, color: '#e2e8f0', lineHeight: 1.7 }}>
+                <div className="mt-2.5 text-[13px] text-text-primary leading-relaxed">
                   {selectedStrategySummary}
                 </div>
-                <div style={{ marginTop: 10, fontSize: 12, color: '#94a3b8' }}>
+                <div className="mt-2.5 text-xs text-slate-400">
                   名称：{selectedPreset.name} ｜ 手续费率 {selectedPreset.config.fee_rate} ｜ 滑点率 {selectedPreset.config.slippage_rate}
                 </div>
               </div>
             ) : null}
 
             {selectedPreset ? (
-              <div style={hintStyle}>
+              <div className="text-xs text-text-muted bg-white/4 border border-white/6 rounded-xl p-2.5">
                 已加载策略 {selectedPreset.slotId} · {selectedPreset.name} ｜ {formatStrategyTypeLabel(selectedPreset.config.strategy_type)} ｜ 实际杠杆以交易工作区选择为准
                 {selectedPreset.config.strategy_type === 'turtle'
                   ? ` ｜ Entry ${selectedPreset.config.turtle_entry_period ?? '-'} ｜ Exit ${selectedPreset.config.turtle_exit_period ?? '-'} ｜ ATR ${selectedPreset.config.turtle_atr_period ?? '-'}`
@@ -489,27 +512,34 @@ export default function PaperTradePanel({ onOpen, onMark, onClose, onReset, onRu
               </div>
             ) : null}
 
-            <SelectField label={'\u4ea4\u6613\u65b9\u5411'} value={directionMode} onChange={(value) => setDirectionMode(value as TradeDirectionMode)} options={getTradeDirectionModeOptions()} />
+            {runMode === 'manual' ? (
+              <SelectField
+                label="手动方向"
+                value={side}
+                onChange={(value) => setSide(value as 'long' | 'short')}
+                options={[
+                  { value: 'long', label: '做多' },
+                  { value: 'short', label: '做空' },
+                ]}
+              />
+            ) : (
+              <SelectField label={'交易方向'} value={directionMode} onChange={(value) => setDirectionMode(value as TradeDirectionMode)} options={getTradeDirectionModeOptions()} />
+            )}
 
             {tradeMode === 'live' && liveConnected && leverageOptions.length > 0 ? (
-              <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-                <span style={{ fontSize: 13, color: '#94a3b8', minWidth: 80 }}>实盘杠杆：</span>
-                <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+              <div className="flex gap-2 items-center flex-wrap">
+                <span className="text-[13px] text-slate-400 min-w-20">实盘杠杆：</span>
+                <div className="flex gap-1 flex-wrap">
                   {leverageOptions.map((lv) => (
                     <button
                       key={lv}
                       type="button"
                       onClick={() => setLeverage(lv)}
-                      style={{
-                        padding: '4px 10px',
-                        borderRadius: 6,
-                        border: `1px solid ${leverage === lv ? 'rgba(245,158,11,0.6)' : 'rgba(51,65,85,0.8)'}`,
-                        background: leverage === lv ? 'rgba(245,158,11,0.15)' : 'rgba(15,23,42,0.6)',
-                        color: leverage === lv ? '#fcd34d' : '#94a3b8',
-                        fontSize: 13,
-                        fontWeight: leverage === lv ? 700 : 400,
-                        cursor: 'pointer',
-                      }}
+                      className={`px-2.5 py-1 rounded-md text-[13px] cursor-pointer transition-all ${
+                        leverage === lv
+                          ? 'border border-amber-500/60 bg-amber-500/15 text-amber-300 font-bold'
+                          : 'border border-slate-700/80 bg-slate-900/60 text-slate-400'
+                      }`}
                     >
                       {lv}x
                     </button>
@@ -519,13 +549,13 @@ export default function PaperTradePanel({ onOpen, onMark, onClose, onReset, onRu
             ) : null}
 
             {liveTicker ? (
-              <div style={hintStyle}>实时最新价：{liveTicker.last_price.toFixed(2)} ｜ 实时标记价：{liveTicker.mark_price.toFixed(2)} ｜ 当前策略交易对：{activeSymbol}</div>
+              <div className="text-xs text-text-muted bg-white/4 border border-white/6 rounded-xl p-2.5">实时最新价：{liveTicker.last_price.toFixed(2)} ｜ 实时标记价：{liveTicker.mark_price.toFixed(2)} ｜ 当前策略交易对：{activeSymbol}</div>
             ) : (
-              <div style={{ ...hintStyle, color: '#fbbf24' }}>实时行情暂未连上，当前策略交易对：{activeSymbol}，当前仍可手动输入价格。</div>
+              <div className="text-xs text-amber-400 bg-white/4 border border-white/6 rounded-xl p-2.5">实时行情暂未连上，当前策略交易对：{activeSymbol}，当前仍可手动输入价格。</div>
             )}
 
             {symbolPositions.length > 0 ? (
-              <div style={{ display: 'grid', gap: 10 }}>
+              <div className="grid gap-2.5">
                 <SelectField
                   label="操作目标仓位"
                   value={selectedPositionId}
@@ -533,18 +563,18 @@ export default function PaperTradePanel({ onOpen, onMark, onClose, onReset, onRu
                   options={symbolPositions.map((item) => item.position_id || '').filter(Boolean)}
                 />
                 {selectedPosition ? (
-                  <div style={hintStyle}>
+                  <div className="text-xs text-text-muted bg-white/4 border border-white/6 rounded-xl p-2.5">
                     当前选中：{selectedPosition.side} ｜ qty {selectedPosition.qty.toFixed(6)} ｜ entry {selectedPosition.entry_price.toFixed(2)} ｜ mark {selectedPosition.mark_price.toFixed(2)}
                   </div>
                 ) : null}
               </div>
             ) : (
-              <div style={{ ...hintStyle, color: '#94a3b8' }}>当前交易对暂无持仓，标记/平仓按钮将按 symbol 提交但不会命中仓位。</div>
+              <div className="text-xs text-slate-400 bg-white/4 border border-white/6 rounded-xl p-2.5">当前交易对暂无持仓，标记/平仓按钮将按 symbol 提交但不会命中仓位。</div>
             )}
 
-            <div style={{ display: 'grid', gap: 12 }}>
-              <div style={{ fontSize: 12, color: '#94a3b8', fontWeight: 700 }}>机器人交易对</div>
-              <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+            <div className="grid gap-3">
+              <div className="text-xs text-slate-400 font-bold">机器人交易对</div>
+              <div className="flex gap-2.5 flex-wrap">
                 {(['BTC_USDT', 'ETH_USDT'] as const).map((robotSymbol) => {
                   const active = selectedRobotSymbols.includes(robotSymbol)
                   return (
@@ -561,99 +591,111 @@ export default function PaperTradePanel({ onOpen, onMark, onClose, onReset, onRu
                           return [...prev, robotSymbol]
                         })
                       }}
-                      style={{
-                        border: active ? '1px solid rgba(56,189,248,0.45)' : '1px solid rgba(71,85,105,0.7)',
-                        background: active ? 'linear-gradient(135deg, rgba(8,47,73,0.96) 0%, rgba(29,78,216,0.92) 100%)' : 'rgba(15,23,42,0.72)',
-                        color: active ? '#e0f2fe' : '#cbd5e1',
-                        borderRadius: 12,
-                        padding: '10px 12px',
-                        fontWeight: 800,
-                        cursor: 'pointer',
-                      }}
+                      className={`rounded-2xl p-2.5 px-3 font-extrabold cursor-pointer transition-all ${
+                        active
+                          ? 'border border-sky-400/45 bg-gradient-to-br from-[rgba(8,47,73,0.96)] to-[rgba(29,78,216,0.92)] text-sky-100'
+                          : 'border border-slate-600/70 bg-slate-900/72 text-slate-300'
+                      }`}
                     >
                       {robotSymbol}
                     </button>
                   )
                 })}
               </div>
-              <div style={hintStyle}>可多选任意组合。自动模式会按所选交易对依次执行一轮策略。</div>
+              <div className="text-xs text-text-muted bg-white/4 border border-white/6 rounded-xl p-2.5">可多选任意组合。自动模式会按所选交易对依次执行一轮策略。</div>
             </div>
 
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+            <div className="grid grid-cols-2 gap-3">
               <div>
-                <div style={{ fontSize: 13, color: '#94a3b8', marginBottom: 6 }}>杠杆倍数</div>
-                <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                <div className="text-[13px] text-slate-400 mb-1.5">杠杆倍数</div>
+                <div className="flex gap-1 flex-wrap">
                   {[1, 2, 3, 5, 10, 20, 25, 50, 75, 100].map((lv) => (
                     <button
                       key={lv}
                       type="button"
                       onClick={() => setLeverage(lv)}
-                      style={{
-                        padding: '4px 10px',
-                        borderRadius: 6,
-                        border: `1px solid ${leverage === lv ? 'rgba(245,158,11,0.6)' : 'rgba(51,65,85,0.8)'}` ,
-                        background: leverage === lv ? 'rgba(245,158,11,0.15)' : 'rgba(15,23,42,0.6)',
-                        color: leverage === lv ? '#fcd34d' : '#94a3b8',
-                        fontSize: 13,
-                        fontWeight: leverage === lv ? 700 : 400,
-                        cursor: 'pointer',
-                      }}
+                      className={`px-2.5 py-1 rounded-md text-[13px] cursor-pointer transition-all ${
+                        leverage === lv
+                          ? 'border border-amber-500/60 bg-amber-500/15 text-amber-300 font-bold'
+                          : 'border border-slate-700/80 bg-slate-900/60 text-slate-400'
+                      }`}
                     >
                       {lv}x
                     </button>
                   ))}
                 </div>
               </div>
-              <SelectField label="运行模式" value={directionMode} onChange={(value) => setDirectionMode(value as TradeDirectionMode)} options={getTradeDirectionModeOptions()} />
+              <SelectField
+                label="运行模式"
+                value={runMode}
+                onChange={(value) => setRunMode(value as RunMode)}
+                options={[
+                  { value: 'auto', label: '策略自动' },
+                  { value: 'manual', label: '手动开仓' },
+                ]}
+              />
             </div>
 
-            <div style={hintStyle}>
-              当前 Trade 区只保留自动交易。机器人会根据策略信号自动判断方向，参数统一取自所选策略配置。
-            </div>
+            {runMode === 'manual' ? (
+              <Button
+                type="button"
+                onClick={handleOpenPosition}
+                disabled={isSubmittingOpen}
+                className="w-full py-3 px-4 rounded-[14px] font-extrabold shadow-[0_8px_18px_rgba(0,0,0,0.14)] bg-gradient-to-br from-[#20232a] to-[#2b3038] text-white disabled:opacity-55 disabled:cursor-not-allowed"
+              >
+                {isSubmittingOpen ? '开仓中...' : '手动开仓'}
+              </Button>
+            ) : (
+              <>
+                <div className="text-xs text-text-muted bg-white/4 border border-white/6 rounded-xl p-2.5">
+                  机器人会根据策略信号自动判断方向，参数统一取自所选策略配置。
+                </div>
 
-            <button
-              onClick={async () => {
-                if (!selectedPreset || isStartingRobot) return
-                const stopLossGuard = validateStopLossAgainstLiquidation({
-                  leverage,
-                  stopLossPct: selectedPreset.config.stop_loss_pct,
-                })
-                if (!stopLossGuard.ok) {
-                  setRobotFeedback(
-                    `当前 ${leverage}x 杠杆下，估算强平缓冲仅 ${(stopLossGuard.liquidationBufferPct * 100).toFixed(2)}%，但止损为 ${(selectedPreset.config.stop_loss_pct * 100).toFixed(2)}%，会先强平后止损，请降低杠杆或缩小止损。`,
-                  )
-                  return
-                }
-                setIsStartingRobot(true)
-                setRobotFeedback('机器人启动中...')
-                try {
-                  if (onRunStrategyOnce) {
-                    const probeResult = await onRunStrategyOnce(selectedRobotSymbols, leverage, tradeMode, directionMode)
-                    const blockReason = getRunnerStartBlockReasonAfterProbe(probeResult as any)
-                    if (blockReason) {
-                      setRobotFeedback(`启动已拦截：${blockReason}`)
+                <Button
+                  onClick={async () => {
+                    if (!selectedPreset || isStartingRobot) return
+                    const stopLossGuard = validateStopLossAgainstLiquidation({
+                      leverage,
+                      stopLossPct: selectedPreset.config.stop_loss_pct,
+                    })
+                    if (!stopLossGuard.ok) {
+                      setRobotFeedback(
+                        `当前 ${leverage}x 杠杆下，估算强平缓冲仅 ${(stopLossGuard.liquidationBufferPct * 100).toFixed(2)}%，但止损为 ${(selectedPreset.config.stop_loss_pct * 100).toFixed(2)}%，会先强平后止损，请降低杠杆或缩小止损。`,
+                      )
                       return
                     }
-                  }
-                  await onStartRobot?.(selectedRobotSymbols)
-                  setIsRobotRunning(true)
-                  onRobotRunningChange?.(true)
-                  onRobotStateChange?.({ running: true, symbol: selectedRobotSymbols[0] })
-                  setRobotFeedback(`自动运行已启动（策略 ${selectedPreset.slotId} / ${selectedRobotSymbols.join(', ')}）`)
-                } catch (error) {
-                  const message = error instanceof Error ? error.message : String(error)
-                  setRobotFeedback(`启动失败：${message}`)
-                } finally {
-                  setIsStartingRobot(false)
-                }
-              }}
-              disabled={!selectedPreset || isStartingRobot || robotActive}
-              style={{ ...primaryButtonStyle, opacity: selectedPreset && !isStartingRobot && !robotActive ? 1 : 0.55, cursor: selectedPreset && !isStartingRobot && !robotActive ? 'pointer' : 'not-allowed' }}
-            >
-              {!selectedPreset ? '请先选择策略' : isStartingRobot ? '启动中...' : robotActive ? '已启用自动轮询' : `${tradeMode === 'live' ? '实盘' : '模拟'}运行策略 ${selectedPreset.slotId}`}
-            </button>
+                    setIsStartingRobot(true)
+                    setRobotFeedback('机器人启动中...')
+                    try {
+                      if (onRunStrategyOnce) {
+                        const probeResult = await onRunStrategyOnce(selectedRobotSymbols, leverage, tradeMode, directionMode, true)
+                        const blockReason = getRunnerStartBlockReasonAfterProbe(probeResult as any)
+                        if (blockReason) {
+                          setRobotFeedback(`启动已拦截：${blockReason}`)
+                          return
+                        }
+                      }
+                      await onStartRobot?.(selectedRobotSymbols)
+                      setIsRobotRunning(true)
+                      onRobotRunningChange?.(true)
+                      onRobotStateChange?.({ running: true, symbol: selectedRobotSymbols[0] })
+                      setRobotFeedback(`自动运行已启动（策略 ${selectedPreset.slotId} / ${selectedRobotSymbols.join(', ')}）`)
+                    } catch (error) {
+                      const message = error instanceof Error ? error.message : String(error)
+                      setRobotFeedback(`启动失败：${message}`)
+                    } finally {
+                      setIsStartingRobot(false)
+                    }
+                  }}
+                  disabled={!selectedPreset || isStartingRobot || robotActive}
+                  className="w-full py-3 px-4 rounded-[14px] font-extrabold shadow-[0_8px_18px_rgba(0,0,0,0.14)] bg-gradient-to-br from-[#20232a] to-[#2b3038] text-white disabled:opacity-55 disabled:cursor-not-allowed"
+                >
+                  {!selectedPreset ? '请先选择策略' : isStartingRobot ? '启动中...' : robotActive ? '已启用自动轮询' : `${tradeMode === 'live' ? '实盘' : '模拟'}运行策略 ${selectedPreset.slotId}`}
+                </Button>
+              </>
+            )}
 
-            <button
+            <Button
               type="button"
               onClick={async () => {
                 try {
@@ -669,21 +711,15 @@ export default function PaperTradePanel({ onOpen, onMark, onClose, onReset, onRu
                 }
               }}
               disabled={!pauseAvailable || isStartingRobot}
-              style={{
-                ...primaryButtonStyle,
-                background: 'linear-gradient(135deg, #475569 0%, #334155 100%)',
-                opacity: pauseAvailable && !isStartingRobot ? 1 : 0.55,
-                cursor: pauseAvailable && !isStartingRobot ? 'pointer' : 'not-allowed',
-                marginTop: 10,
-              }}
+              className="w-full py-3 px-4 rounded-[14px] font-extrabold bg-gradient-to-br from-slate-600 to-slate-700 text-white disabled:opacity-55 disabled:cursor-not-allowed mt-2.5"
             >
               暂停机器人
-            </button>
+            </Button>
 
-            {robotFeedback ? <div style={hintStyle}>{robotFeedback}</div> : null}
+            {robotFeedback ? <div className="text-xs text-text-muted bg-white/4 border border-white/6 rounded-xl p-2.5">{robotFeedback}</div> : null}
           </div>
 
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+          <div className="grid grid-cols-2 gap-4">
             <ActionPanel
               eyebrow="更新持仓标记"
               title="更新标记价"
@@ -691,17 +727,14 @@ export default function PaperTradePanel({ onOpen, onMark, onClose, onReset, onRu
               accent="purple"
               control={<NumberField label="标记价" value={markPrice} onChange={setMarkPrice} />}
               button={
-                <button
+                <Button
+                  variant="outline"
                   onClick={handleMarkPosition}
                   disabled={!selectedPosition || isSubmittingMark}
-                  style={{
-                    ...secondaryButtonStyle('#2b3038'),
-                    opacity: selectedPosition && !isSubmittingMark ? 1 : 0.5,
-                    cursor: selectedPosition && !isSubmittingMark ? 'pointer' : 'not-allowed',
-                  }}
+                  className="w-full py-3 px-4 rounded-[14px] font-extrabold bg-[#2b3038] text-white border-0 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   {selectedPosition ? (isSubmittingMark ? '更新中...' : '更新标记价') : '暂无可更新持仓'}
-                </button>
+                </Button>
               }
             />
             <ActionPanel
@@ -711,43 +744,35 @@ export default function PaperTradePanel({ onOpen, onMark, onClose, onReset, onRu
               accent="blue"
               control={<NumberField label="平仓价" value={closingPrice} onChange={setClosingPrice} />}
               button={
-                <button
+                <Button
+                  variant="outline"
                   onClick={handleClosePosition}
                   disabled={!selectedPosition || isSubmittingClose}
-                  style={{
-                    ...secondaryButtonStyle('#2b3038'),
-                    opacity: selectedPosition && !isSubmittingClose ? 1 : 0.5,
-                    cursor: selectedPosition && !isSubmittingClose ? 'pointer' : 'not-allowed',
-                  }}
+                  className="w-full py-3 px-4 rounded-[14px] font-extrabold bg-[#2b3038] text-white border-0 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   {selectedPosition ? (isSubmittingClose ? '平仓中...' : '模拟平仓') : '暂无可平仓持仓'}
-                </button>
+                </Button>
               }
             />
           </div>
           {tradeActionFeedback ? (
             <div
-              style={{
-                marginTop: 12,
-                padding: '12px 14px',
-                borderRadius: 12,
-                border: tradeActionFeedback.type === 'success' ? '1px solid rgba(34,197,94,0.28)' : '1px solid rgba(248,113,113,0.28)',
-                background: tradeActionFeedback.type === 'success' ? 'rgba(20,83,45,0.22)' : 'rgba(127,29,29,0.22)',
-                color: tradeActionFeedback.type === 'success' ? '#bbf7d0' : '#fecaca',
-                fontSize: 13,
-                lineHeight: 1.6,
-              }}
+              className={`mt-3 p-3 px-3.5 rounded-xl text-[13px] leading-relaxed ${
+                tradeActionFeedback.type === 'success'
+                  ? 'border border-green-500/28 bg-green-900/22 text-green-200'
+                  : 'border border-red-400/28 bg-red-900/22 text-red-200'
+              }`}
             >
               {tradeActionFeedback.message}
             </div>
           ) : null}
         </div>
 
-        <div style={{ display: 'grid', gap: 16 }}>
-          <div style={sidePanelStyle}>
-            <div style={panelEyebrowStyle}>风险预估</div>
-            <h4 style={panelTitleStyle}>实时风险预估</h4>
-            <div style={{ display: 'grid', gap: 10, marginTop: 12 }}>
+        <div className="grid gap-4">
+          <div className="border border-white/8 rounded-[22px] bg-gradient-to-b from-[rgba(15,17,22,0.94)] to-[rgba(10,12,16,0.96)] shadow-[0_10px_24px_rgba(0,0,0,0.14)] p-[18px] sticky top-3">
+            <div className="text-[11px] text-text-secondary uppercase tracking-[0.08em]">风险预估</div>
+            <h4 className="mt-1.5 text-lg font-extrabold tracking-[-0.02em] text-[#f8fafc]">实时风险预估</h4>
+            <div className="grid gap-2.5 mt-3">
               <MetricCard label="预估仓位" value={activePreview.qty.toFixed(6)} />
               <MetricCard label="预估名义价值" value={`$${activePreview.notional.toFixed(2)}`} />
               <MetricCard label="生效保证金" value={`$${activePreview.effectiveAllocatedMargin.toFixed(2)}`} />
@@ -761,10 +786,10 @@ export default function PaperTradePanel({ onOpen, onMark, onClose, onReset, onRu
             </div>
           </div>
 
-          <div style={sidePanelStyle}>
-            <div style={panelEyebrowStyle}>操作提示</div>
-            <h4 style={panelTitleStyle}>操作提示</h4>
-            <ul style={{ margin: '12px 0 0', paddingLeft: 18, color: '#cbd5e1', fontSize: 13, lineHeight: 1.7 }}>
+          <div className="border border-white/8 rounded-[22px] bg-gradient-to-b from-[rgba(15,17,22,0.94)] to-[rgba(10,12,16,0.96)] shadow-[0_10px_24px_rgba(0,0,0,0.14)] p-[18px] sticky top-3">
+            <div className="text-[11px] text-text-secondary uppercase tracking-[0.08em]">操作提示</div>
+            <h4 className="mt-1.5 text-lg font-extrabold tracking-[-0.02em] text-[#f8fafc]">操作提示</h4>
+            <ul className="mt-3 pl-[18px] text-slate-300 text-[13px] leading-relaxed list-disc">
               <li>先确认方向、价格、杠杆，再看预估名义价值和最大风险。</li>
               <li>风险模式下优先看风险资金、止损距离、推导仓位是否合理。</li>
               <li>保证金模式下如果填了显式数量，将覆盖保证金推导数量。</li>
@@ -779,18 +804,30 @@ export default function PaperTradePanel({ onOpen, onMark, onClose, onReset, onRu
 
 function NumberField({ label, value, onChange, step, disabled = false }: { label: string; value: number; onChange: (v: number) => void; step?: number; disabled?: boolean }) {
   return (
-    <label style={{ display: 'grid', gap: 6 }}>
-      <span style={fieldLabelStyle}>{label}</span>
-      <input type="number" step={step} value={value} onChange={(e) => onChange(Number(e.target.value))} disabled={disabled} style={{ ...inputStyle, opacity: disabled ? 0.65 : 1, background: disabled ? 'rgba(15,23,42,0.72)' : 'rgba(2,6,23,0.88)', cursor: disabled ? 'not-allowed' : 'text' }} />
+    <label className="grid gap-1.5">
+      <span className="text-xs text-slate-400 font-semibold">{label}</span>
+      <Input
+        type="number"
+        step={step}
+        value={value}
+        onChange={(e) => onChange(Number(e.target.value))}
+        disabled={disabled}
+        className={`p-2.5 px-3 rounded-xl border border-white/8 text-[#f8fafc] ${disabled ? 'opacity-65 cursor-not-allowed bg-slate-900/72' : 'bg-[rgba(2,6,23,0.88)]'}`}
+      />
     </label>
   )
 }
 
 function SelectField({ label, value, onChange, options, disabled = false }: { label: string; value: string; onChange: (v: string) => void; options: Array<string | { value: string; label: string }>; disabled?: boolean }) {
   return (
-    <label style={{ display: 'grid', gap: 6 }}>
-      <span style={fieldLabelStyle}>{label}</span>
-      <select value={value} onChange={(e) => onChange(e.target.value)} disabled={disabled} style={{ ...inputStyle, opacity: disabled ? 0.65 : 1, background: disabled ? 'rgba(15,23,42,0.72)' : 'rgba(2,6,23,0.88)', cursor: disabled ? 'not-allowed' : 'pointer' }}>
+    <label className="grid gap-1.5">
+      <span className="text-xs text-slate-400 font-semibold">{label}</span>
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        disabled={disabled}
+        className={`p-2.5 px-3 rounded-xl border border-white/8 text-[#f8fafc] text-sm ${disabled ? 'opacity-65 cursor-not-allowed bg-slate-900/72' : 'bg-[rgba(2,6,23,0.88)] cursor-pointer'}`}
+      >
         {options.map((opt) => {
           const normalized = typeof opt === 'string' ? { value: opt, label: opt } : opt
           return <option key={normalized.value} value={normalized.value}>{normalized.label}</option>
@@ -802,15 +839,13 @@ function SelectField({ label, value, onChange, options, disabled = false }: { la
 
 function ModeChip({ active = false, children }: { active?: boolean; children: React.ReactNode }) {
   return (
-    <button style={{
-      border: 0,
-      borderRadius: 999,
-      padding: '8px 12px',
-      fontWeight: 700,
-      cursor: 'default',
-      background: active ? 'linear-gradient(135deg, rgba(34,39,46,0.96) 0%, rgba(24,27,32,0.96) 100%)' : 'rgba(255,255,255,0.06)',
-      color: '#e5e7eb',
-    }}>
+    <button
+      className={`border-0 rounded-full px-3 py-2 font-bold cursor-default ${
+        active
+          ? 'bg-gradient-to-br from-[rgba(34,39,46,0.96)] to-[rgba(24,27,32,0.96)] text-gray-200'
+          : 'bg-white/6 text-gray-200'
+      }`}
+    >
       {children}
     </button>
   )
@@ -818,196 +853,34 @@ function ModeChip({ active = false, children }: { active?: boolean; children: Re
 
 function ActionPanel({ eyebrow, title, description, accent, control, button }: { eyebrow: string; title: string; description: string; accent: 'purple' | 'blue'; control: React.ReactNode; button: React.ReactNode }) {
   return (
-    <div style={{
-      ...panelStyle,
-      border: '1px solid rgba(255,255,255,0.08)',
-      boxShadow: '0 14px 32px rgba(0,0,0,0.18)',
-    }}>
-      <div style={panelEyebrowStyle}>{eyebrow}</div>
-      <h4 style={panelTitleStyle}>{title}</h4>
-      <div style={{ color: '#94a3b8', fontSize: 13, lineHeight: 1.6 }}>{description}</div>
-      <div style={{ marginTop: 12 }}>{control}</div>
-      <div style={{ marginTop: 12 }}>{button}</div>
+    <div className="border border-white/8 rounded-[22px] bg-gradient-to-b from-[rgba(15,17,22,0.94)] to-[rgba(10,12,16,0.96)] shadow-[0_14px_32px_rgba(0,0,0,0.18)] p-[18px]">
+      <div className="text-[11px] text-text-secondary uppercase tracking-[0.08em]">{eyebrow}</div>
+      <h4 className="mt-1.5 text-lg font-extrabold tracking-[-0.02em] text-[#f8fafc]">{title}</h4>
+      <div className="text-slate-400 text-[13px] leading-relaxed">{description}</div>
+      <div className="mt-3">{control}</div>
+      <div className="mt-3">{button}</div>
     </div>
   )
 }
 
 function HeroStat({ label, value }: { label: string; value: string }) {
   return (
-    <div style={{ padding: 12, borderRadius: 16, background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.08)' }}>
-      <div style={{ fontSize: 11, color: 'rgba(226,232,240,0.74)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>{label}</div>
-      <div style={{ marginTop: 8, fontSize: 18, fontWeight: 800, color: '#f8fafc' }}>{value}</div>
+    <div className="p-3 rounded-[16px] bg-white/5 border border-white/8">
+      <div className="text-[11px] text-text-secondary uppercase tracking-[0.08em]">{label}</div>
+      <div className="mt-2 text-lg font-extrabold text-[#f8fafc]">{value}</div>
     </div>
   )
 }
 
 function MetricCard({ label, value, tone = 'neutral' }: { label: string; value: string; tone?: 'neutral' | 'danger' }) {
   return (
-    <div style={{
-      padding: 12,
-      borderRadius: 14,
-      background: tone === 'danger' ? 'rgba(127,29,29,0.24)' : 'rgba(15,23,42,0.88)',
-      border: tone === 'danger' ? '1px solid rgba(248,113,113,0.28)' : '1px solid rgba(51,65,85,0.78)',
-    }}>
-      <div style={fieldLabelStyle}>{label}</div>
-      <div style={{ marginTop: 6, fontSize: 16, fontWeight: 800, color: tone === 'danger' ? '#fecaca' : '#f8fafc' }}>{value}</div>
+    <div className={`p-3 rounded-[14px] ${
+      tone === 'danger'
+        ? 'bg-red-900/24 border border-red-400/28'
+        : 'bg-slate-900/88 border border-slate-700/78'
+    }`}>
+      <div className="text-xs text-slate-400 font-semibold">{label}</div>
+      <div className={`mt-1.5 text-base font-extrabold ${tone === 'danger' ? 'text-red-200' : 'text-[#f8fafc]'}`}>{value}</div>
     </div>
   )
-}
-
-const slotCardGridStyle: React.CSSProperties = {
-  display: 'grid',
-  gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
-  gap: 10,
-}
-
-const slotCardStyle: React.CSSProperties = {
-  display: 'grid',
-  gap: 4,
-  padding: 12,
-  borderRadius: 16,
-  textAlign: 'left',
-  cursor: 'pointer',
-  transition: 'all 0.2s ease',
-}
-
-const slotPillStyle: React.CSSProperties = {
-  padding: '4px 8px',
-  borderRadius: 999,
-  fontSize: 11,
-  fontWeight: 800,
-}
-
-const heroCardStyle: React.CSSProperties = {
-  borderRadius: 24,
-  padding: 20,
-  background: 'linear-gradient(135deg, #121418 0%, #1a1d22 55%, #23272d 100%)',
-  boxShadow: '0 14px 28px rgba(0,0,0,0.16)',
-  display: 'grid',
-  gap: 18,
-}
-
-const heroStatsGridStyle: React.CSSProperties = {
-  display: 'grid',
-  gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
-  gap: 12,
-}
-
-const panelStyle: React.CSSProperties = {
-  border: '1px solid rgba(255,255,255,0.08)',
-  borderRadius: 22,
-  background: 'linear-gradient(180deg, rgba(15,17,22,0.94) 0%, rgba(10,12,16,0.96) 100%)',
-  boxShadow: '0 10px 24px rgba(0,0,0,0.14)',
-  padding: 18,
-}
-
-const sidePanelStyle: React.CSSProperties = {
-  ...panelStyle,
-  position: 'sticky',
-  top: 12,
-}
-
-const panelHeaderStyle: React.CSSProperties = {
-  display: 'flex',
-  justifyContent: 'space-between',
-  gap: 12,
-  flexWrap: 'wrap',
-  alignItems: 'center',
-  marginBottom: 14,
-}
-
-const eyebrowStyle: React.CSSProperties = {
-  fontSize: 11,
-  color: 'rgba(226,232,240,0.74)',
-  textTransform: 'uppercase',
-  letterSpacing: '0.08em',
-}
-
-const panelEyebrowStyle: React.CSSProperties = {
-  fontSize: 11,
-  color: '#d1d5db',
-  textTransform: 'uppercase',
-  letterSpacing: '0.08em',
-}
-
-const panelTitleStyle: React.CSSProperties = {
-  margin: '6px 0 0',
-  fontSize: 18,
-  fontWeight: 800,
-  letterSpacing: '-0.02em',
-  color: '#f8fafc',
-}
-
-const fieldLabelStyle: React.CSSProperties = {
-  fontSize: 12,
-  color: '#94a3b8',
-  fontWeight: 600,
-}
-
-const inputStyle: React.CSSProperties = {
-  padding: '11px 12px',
-  borderRadius: 12,
-  border: '1px solid rgba(255,255,255,0.08)',
-  background: 'rgba(9,11,15,0.92)',
-  color: '#f8fafc',
-}
-
-const primaryButtonStyle: React.CSSProperties = {
-  width: '100%',
-  padding: '13px 16px',
-  borderRadius: 14,
-  border: 0,
-  background: 'linear-gradient(135deg, #20232a 0%, #2b3038 100%)',
-  color: '#fff',
-  fontWeight: 800,
-  cursor: 'pointer',
-  boxShadow: '0 8px 18px rgba(0,0,0,0.14)',
-}
-
-const strategySummaryCardStyle: React.CSSProperties = {
-  borderRadius: 18,
-  padding: 16,
-  background: 'linear-gradient(135deg, rgba(15,17,22,0.9) 0%, rgba(24,27,32,0.96) 100%)',
-  border: '1px solid rgba(255,255,255,0.08)',
-  boxShadow: '0 8px 18px rgba(0,0,0,0.12)',
-}
-
-const strategySlotBadgeStyle: React.CSSProperties = {
-  padding: '8px 12px',
-  borderRadius: 999,
-  background: 'rgba(255,255,255,0.06)',
-  color: '#e5e7eb',
-  fontSize: 12,
-  fontWeight: 800,
-}
-
-const syncSwitchStyle: React.CSSProperties = {
-  display: 'inline-flex',
-  alignItems: 'center',
-  gap: 6,
-  fontSize: 12,
-  color: '#cbd5e1',
-  fontWeight: 700,
-}
-
-function secondaryButtonStyle(background: string): React.CSSProperties {
-  return {
-    width: '100%',
-    padding: '12px 16px',
-    borderRadius: 14,
-    border: 0,
-    background,
-    color: '#fff',
-    fontWeight: 800,
-    cursor: 'pointer',
-  }
-}
-
-const hintStyle: React.CSSProperties = {
-  fontSize: 12,
-  color: '#9ca3af',
-  background: 'rgba(255,255,255,0.04)',
-  border: '1px solid rgba(255,255,255,0.06)',
-  borderRadius: 12,
-  padding: '10px 12px',
 }

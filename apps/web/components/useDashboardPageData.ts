@@ -5,6 +5,7 @@ import {
   closeLivePosition,
   closePaperPosition,
   deleteStrategySlot,
+  dryRunStrategy,
   getDashboard,
   getEquityCurve,
   getHistoryStats,
@@ -147,6 +148,11 @@ export function useDashboardPageData() {
     const dashMode = dashboardData.trade_mode || ''
     setHistoryFilters((prev) => prev.trade_mode === dashMode ? prev : { ...prev, trade_mode: dashMode as any })
     return dashboardData
+  }
+
+  function applyPaperSnapshot(snapshot?: Pick<DashboardData, 'account' | 'positions' | 'orders'>) {
+    if (!snapshot) return
+    setDashboard((prev) => prev ? { ...prev, ...snapshot } : prev)
   }
 
   function buildStrategyPriceReference(
@@ -469,7 +475,7 @@ export function useDashboardPageData() {
     setBacktest(null)
   }
 
-  async function handleRunStrategyOnce(symbols?: Array<'BTC_USDT' | 'ETH_USDT'>, overrideLeverage?: number, overrideTradeMode?: 'paper' | 'live', overrideDirectionMode?: 'auto' | 'long_only' | 'short_only') {
+  async function handleRunStrategyOnce(symbols?: Array<'BTC_USDT' | 'ETH_USDT'>, overrideLeverage?: number, overrideTradeMode?: 'paper' | 'live', overrideDirectionMode?: 'auto' | 'long_only' | 'short_only', dryRun = false) {
     const activeStrategy = selectedStrategyPreset?.config || strategy
     if (!activeStrategy) return
     const activeSymbols = symbols && symbols.length > 0 ? symbols : (activeStrategy.symbols && activeStrategy.symbols.length > 0 ? activeStrategy.symbols : [activeStrategy.symbol])
@@ -519,7 +525,7 @@ export function useDashboardPageData() {
       fee_rate: activeStrategy.fee_rate,
       slippage_rate: activeStrategy.slippage_rate,
     }
-    const result = await runStrategyOnce(payload)
+    const result = await (dryRun ? dryRunStrategy(payload) : runStrategyOnce(payload))
     setRunnerResult(result)
     await Promise.all([
       reloadDashboard(),
@@ -541,7 +547,7 @@ export function useDashboardPageData() {
   }
 
   async function handleResumeRunner() {
-    await resumeRunner()
+    await resumeRunner(dashboard?.runner?.trade_mode)
     await Promise.all([
       reloadDashboard(),
       reloadRunnerLogs(),
@@ -551,7 +557,11 @@ export function useDashboardPageData() {
   }
 
   async function handleOpenPaper(payload: PaperTradePayload) {
-    await placePaperOrder(payload)
+    const result = await placePaperOrder(payload)
+    if (!result.ok) {
+      throw new Error(result.reason || 'paper_order_failed')
+    }
+    applyPaperSnapshot(result.snapshot)
     await Promise.all([
       reloadDashboard(),
       reloadHistory(),
@@ -561,7 +571,11 @@ export function useDashboardPageData() {
   }
 
   async function handleMarkPaper(payload: PaperMarkPayload) {
-    await updatePaperMark(payload)
+    const result = await updatePaperMark(payload)
+    if (!result.ok) {
+      throw new Error(result.reason || 'paper_mark_failed')
+    }
+    applyPaperSnapshot(result.snapshot)
     await Promise.all([
       reloadDashboard(),
       reloadHistory(),
@@ -574,7 +588,11 @@ export function useDashboardPageData() {
     if (dashboard?.trade_mode === 'live') {
       await closeLivePosition(payload.symbol, payload.position_id)
     } else {
-      await closePaperPosition(payload)
+      const result = await closePaperPosition(payload)
+      if (!result.ok) {
+        throw new Error(result.reason || 'paper_close_failed')
+      }
+      applyPaperSnapshot(result.snapshot)
     }
     await Promise.all([
       reloadDashboard(),

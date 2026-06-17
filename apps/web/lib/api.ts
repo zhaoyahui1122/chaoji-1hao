@@ -159,7 +159,7 @@ export type StrategySavePayload = StrategyConfig
 export type BacktestRequestPayload = {
   symbol: Symbol
   timeframe: Timeframe
-  strategy_type: 'classic' | 'turtle' | 'ict'
+  strategy_type: 'classic' | 'turtle' | 'ict' | 'macd_trend'
   data_source: DataSource
   leverage: number
   initial_balance: number
@@ -213,7 +213,7 @@ export type RunnerRequestPayload = {
   symbol: Symbol
   symbols?: Symbol[] | null
   timeframe: Timeframe
-  strategy_type: 'classic' | 'turtle' | 'ict'
+  strategy_type: 'classic' | 'turtle' | 'ict' | 'macd_trend'
   data_source: DataSource
   trade_mode?: 'paper' | 'live'
   direction_mode?: 'auto' | 'long_only' | 'short_only'
@@ -255,6 +255,7 @@ export type RunnerRequestPayload = {
   fee_rate: number
   slippage_rate: number
   operation_token?: string
+  dry_run?: boolean
 }
 
 export type RunnerStatusResponse = {
@@ -304,6 +305,7 @@ export type PaperOrderResponse = {
   fee?: number
   slippage_rate?: number
   reason?: string
+  snapshot?: PaperSnapshotResponse
 }
 
 export type PaperMarkResponse = {
@@ -436,6 +438,18 @@ export async function runStrategyOnce(payload: RunnerRequestPayload): Promise<Ru
   return res.json()
 }
 
+export async function dryRunStrategy(payload: RunnerRequestPayload): Promise<RunnerInvocationResult> {
+  const finalPayload = { ...payload, dry_run: true }
+
+  const res = await apiFetch(`${API_BASE}/runner/run-once`, {
+    method: 'POST',
+    headers: apiHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify(finalPayload),
+  })
+  if (!res.ok) throw await parseApiError(res, '策略预检失败')
+  return res.json()
+}
+
 export async function getRunnerLogs(): Promise<RunnerLogsResponse> {
 
   const res = await apiFetch(`${API_BASE}/runner/logs`, { cache: 'no-store' })
@@ -465,11 +479,18 @@ export async function toggleRunner(enabled: boolean, symbols?: Symbol[] | null, 
   return res.json()
 }
 
-export async function resumeRunner(): Promise<RunnerResumeResponse> {
+export async function resumeRunner(tradeMode?: 'paper' | 'live'): Promise<RunnerResumeResponse> {
+  const operation_token = tradeMode === 'live'
+    ? await (async () => {
+      confirmHighRiskOperation('确认恢复实盘机器人？请先确认异常原因已处理，恢复后系统会继续按策略自动执行。')
+      return getOperationToken('runner_resume_live')
+    })()
+    : undefined
 
   const res = await apiFetch(`${API_BASE}/runner/resume`, {
     method: 'POST',
-    headers: apiHeaders(),
+    headers: apiHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify({ operation_token }),
   })
   if (!res.ok) throw new Error('Failed to resume runner')
   return res.json()

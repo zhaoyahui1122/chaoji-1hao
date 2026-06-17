@@ -14,7 +14,7 @@ export default defineConfig({
     trace: 'on-first-retry',
   },
   webServer: {
-    command: 'powershell -NoLogo -Command "$env:NEXT_PUBLIC_API_BASE=\'http://127.0.0.1:8001\'; $env:NEXT_DIST_DIR=\'.next-e2e\'; npm run dev -- --hostname 127.0.0.1 --port 3100"',
+    command: 'powershell -NoLogo -Command "$env:NEXT_PUBLIC_API_BASE=\'http://127.0.0.1:8012\'; $env:NEXT_DIST_DIR=\'.next-e2e\'; npm run dev -- --webpack --hostname 127.0.0.1 --port 3100"',
     url: 'http://127.0.0.1:3100',
     reuseExistingServer: true,
     timeout: 120_000,

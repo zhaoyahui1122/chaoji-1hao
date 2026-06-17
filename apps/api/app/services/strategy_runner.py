@@ -26,6 +26,10 @@ from app.strategy.boll_rsi_ma import (
 )
 from app.strategy.turtle import prepare_signals as turtle_prepare_signals
 from app.strategy.ict import generate_signal as ict_generate_signal
+from app.strategy.macd_trend import (
+    compute_indicators as macd_compute_indicators,
+    prepare_signals as macd_prepare_signals,
+)
 
 logger = get_logger(__name__)
 
@@ -110,6 +114,93 @@ def _run_turtle_signal(config: dict[str, Any], df, last_row) -> tuple[str | None
 
     extra = {"atr": atr, "turtle_signal": raw_signal, "regime": regime, "adx": adx, "rsi": rsi}
     return signal, extra
+
+
+def _run_macd_signal(config: dict[str, Any], df, last_row) -> tuple[str | None, dict[str, Any] | None]:
+    """Run MACD trend/divergence strategy and return (signal, extra_meta)."""
+    data = macd_prepare_signals(df, config)
+    last = data.iloc[-1]
+    raw_signal = last.get("signal")
+    signal_source = last.get("signal_source")
+
+    signal = raw_signal if raw_signal in ("long", "short") else None
+
+    extra: dict[str, Any] = {"signal_source": signal_source}
+    lookback = int(config.get("macd_breakout_lookback", 20))
+    trailing_pct = float(config.get("macd_trailing_stop_pct", 2.0)) / 100.0
+
+    if signal == "long":
+        # best_price = 最高价（用于跟踪止损的锚点）
+        best_price = float(df["high"].iloc[-lookback:].max())
+        extra["best_price"] = best_price
+        extra["stop_loss_price"] = best_price * (1 - trailing_pct)
+    elif signal == "short":
+        best_price = float(df["low"].iloc[-lookback:].min())
+        extra["best_price"] = best_price
+        extra["stop_loss_price"] = best_price * (1 + trailing_pct)
+
+    return signal, extra
+
+
+def _compute_trailing_stop(
+    config: dict[str, Any],
+    df,
+    existing,
+) -> float | None:
+    """Compute the dynamic trailing stop for a MACD trend position.
+
+    Tracks best_price (highest high for long / lowest low for short) since entry.
+    Applies a decay coefficient that tightens the trailing % as the position ages:
+        effective_pct = trailing_pct * max(decay_floor, decay_base ^ bars_held)
+
+    Only moves in the favorable direction (tightens, never loosens).
+    """
+    trailing_pct = float(config.get("macd_trailing_stop_pct", 2.0)) / 100.0
+    decay_base = float(config.get("macd_trailing_decay_base", 0.98))
+    decay_floor = float(config.get("macd_trailing_decay_floor", 0.3))
+    entry_price = float(existing.entry_price)
+    current_stop = getattr(existing, "stop_loss_price", None) or 0.0
+
+    # ── Update best_price from latest candle ──
+    best = getattr(existing, "best_price", 0.0) or 0.0
+    bars_held = getattr(existing, "trailing_bars_held", 0) or 0
+
+    last_high = float(df["high"].iloc[-1]) if len(df) > 0 else 0.0
+    last_low = float(df["low"].iloc[-1]) if len(df) > 0 else 0.0
+
+    if existing.side == "long":
+        if best <= 0:
+            best = float(df["high"].max())
+        else:
+            best = max(best, last_high)
+    else:
+        if best <= 0:
+            best = float(df["low"].min())
+        else:
+            best = min(best, last_low)
+
+    # Persist updated tracking fields on the position object
+    existing.best_price = best
+    existing.trailing_bars_held = bars_held + 1
+
+    # ── Decay coefficient: trailing tightens over time ──
+    decay = max(decay_floor, decay_base ** bars_held)
+    effective_pct = trailing_pct * decay
+
+    # ── Compute new stop ──
+    if existing.side == "long":
+        new_stop = best * (1 - effective_pct)
+        # Breakeven floor: never below entry
+        new_stop = max(new_stop, entry_price * 0.995)
+        if current_stop > 0:
+            new_stop = max(new_stop, current_stop)
+        return new_stop
+    else:
+        new_stop = best * (1 + effective_pct)
+        new_stop = min(new_stop, entry_price * 1.005)
+        if current_stop > 0:
+            new_stop = min(new_stop, current_stop)
+        return new_stop
 
 
 def _should_block_reverse_signal(config: dict[str, Any], existing, signal: str | None, price: float) -> bool:
@@ -264,6 +355,8 @@ def _close_position_from_trigger(
 
 
 def _save_and_return(config: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
+    if bool(config.get("dry_run")):
+        return {**payload, "dry_run": True}
     append_log({"ts": datetime.utcnow().isoformat(), "config": config, "result": payload})
     state = load_runner_state()
     save_runner_state({
@@ -303,9 +396,10 @@ def _prefetch_symbol_data(symbol: str, strategy_type: str, data_source: str, tim
 def run_strategy_cycle(config: dict[str, Any]) -> dict[str, Any]:
     state = load_runner_state()
     trade_mode = config.get("trade_mode", "paper")
+    dry_run = bool(config.get("dry_run"))
     guard = evaluate_runner_guards(trade_mode=trade_mode)
 
-    if state.get("manual_resume_required") and guard["allowed"]:
+    if not dry_run and state.get("manual_resume_required") and guard["allowed"]:
         state["manual_resume_required"] = False
         state["halt_reason"] = None
         state["last_error"] = None
@@ -314,6 +408,8 @@ def run_strategy_cycle(config: dict[str, Any]) -> dict[str, Any]:
     if not guard["allowed"]:
         logger.warning("Runner halted: %s", guard["halt_reason"])
         payload = {"ok": False, "action": "halted", "reason": guard["halt_reason"], "guard": guard}
+        if dry_run:
+            return {**payload, "dry_run": True}
         append_log({"ts": datetime.utcnow().isoformat(), "config": config, "result": payload})
         notify_guard_halt(guard["halt_reason"], guard.get("consecutive_loss_count", 0))
         save_runner_state({
@@ -353,16 +449,17 @@ def run_strategy_cycle(config: dict[str, Any]) -> dict[str, Any]:
         except Exception as exc:
             logger.error("[LIVE-SYNC] Failed to sync positions: %s", exc)
 
-    save_runner_state({
-        **state,
-        "is_running": True,
-        "enabled": state.get("enabled", False),  # run-once ??????????? runner
-        "last_error": None,
-        "last_config": config,
-        "halt_reason": None,
-        "selected_symbols": symbols,
-        "trade_mode": trade_mode,
-    })
+    if not dry_run:
+        save_runner_state({
+            **state,
+            "is_running": True,
+            "enabled": state.get("enabled", False),  # run-once ??????????? runner
+            "last_error": None,
+            "last_config": config,
+            "halt_reason": None,
+            "selected_symbols": symbols,
+            "trade_mode": trade_mode,
+        })
 
     try:
         # Phase 1: Parallel data fetch for all symbols
@@ -436,6 +533,8 @@ def run_strategy_cycle(config: dict[str, Any]) -> dict[str, Any]:
     except Exception as exc:
         logger.error("Runner cycle error: %s", exc, exc_info=True)
         payload = {"ok": False, "action": "error", "reason": str(exc)}
+        if dry_run:
+            return {**payload, "dry_run": True}
         append_log({"ts": datetime.utcnow().isoformat(), "config": config, "result": payload})
         notify_error("runner_cycle", str(exc))
         save_runner_state({
@@ -471,6 +570,7 @@ def _run_single_symbol_cycle(
     if broker is None:
         broker = PAPER_BROKER
     trade_mode = config.get("trade_mode", "paper")
+    dry_run = bool(config.get("dry_run"))
 
     # ---- ICT 策略：多 timeframe 数据拉取 ----
     if strategy_type == "ict":
@@ -548,6 +648,8 @@ def _run_single_symbol_cycle(
 
         if strategy_type == "turtle":
             signal, extra_meta = _run_turtle_signal(config, df, last_row)
+        elif strategy_type == "macd_trend":
+            signal, extra_meta = _run_macd_signal(config, df, last_row)
         else:
             signal, extra_meta = _run_classic_signal(config, df, last_row)
 
@@ -587,6 +689,23 @@ def _run_single_symbol_cycle(
                     "threshold": threshold,
                 },
             }
+        if dry_run:
+            return {
+                "ok": True,
+                "dry_run": True,
+                "symbol": symbol,
+                "action": "would_close",
+                "close_reason": "reverse_signal",
+                "signal": signal,
+                "price": price,
+                "existing_position": {
+                    "side": existing.side,
+                    "qty": getattr(existing, "qty", None),
+                    "entry_price": getattr(existing, "entry_price", None),
+                },
+                "guard": guard,
+                "market_data": market_meta,
+            }
         close_result = broker.close_position(
             symbol, price, source="runner",
             meta={"runner": True, "strategy_type": strategy_type, "close_reason": "reverse_signal", "signal": signal},
@@ -599,6 +718,23 @@ def _run_single_symbol_cycle(
         turtle_sig = (extra_meta or {}).get("turtle_signal")
         should_exit = (existing.side == "long" and turtle_sig == "exit_long") or (existing.side == "short" and turtle_sig == "exit_short")
         if should_exit:
+            if dry_run:
+                return {
+                    "ok": True,
+                    "dry_run": True,
+                    "symbol": symbol,
+                    "action": "would_close",
+                    "close_reason": "turtle_exit",
+                    "signal": turtle_sig,
+                    "price": price,
+                    "existing_position": {
+                        "side": existing.side,
+                        "qty": getattr(existing, "qty", None),
+                        "entry_price": getattr(existing, "entry_price", None),
+                    },
+                    "guard": guard,
+                    "market_data": market_meta,
+                }
             result = broker.close_position(
                 symbol, price, source="runner",
                 meta={"runner": True, "strategy_type": strategy_type, "close_reason": "turtle_exit", "turtle_signal": turtle_sig},
@@ -679,6 +815,18 @@ def _run_single_symbol_cycle(
             )
             sizing["stop_loss_price"] = sl_price
             sizing["take_profit_price"] = tp_price
+        elif strategy_type == "macd_trend" and extra_meta and extra_meta.get("stop_loss_price"):
+            sl_price = extra_meta["stop_loss_price"]
+            # No fixed take-profit — trailing stop handles exit
+            tp_price = price * 100 if signal == "long" else price * 0.001
+            sizing = build_risk_sized_order(
+                side=signal, account_equity=broker.equity, entry_price=price,
+                leverage=leverage, risk_per_trade_pct=risk_per_trade_pct,
+                stop_loss_pct=stop_loss_pct, take_profit_pct=take_profit_pct,
+                allocated_margin_cap=allocated_margin,
+            )
+            sizing["stop_loss_price"] = sl_price
+            sizing["take_profit_price"] = tp_price
         else:
             sizing = build_risk_sized_order(
                 side=signal, account_equity=broker.equity, entry_price=price,
@@ -715,6 +863,29 @@ def _run_single_symbol_cycle(
         if price > 0 and leverage > 0:
             sizing["qty"] = (effective_allocated_margin * leverage) / price
         explicit_qty = sizing["qty"]
+        if dry_run:
+            return {
+                "ok": True,
+                "dry_run": True,
+                "symbol": symbol,
+                "action": "would_open",
+                "signal": signal,
+                "price": price,
+                "result": {
+                    "ok": True,
+                    "symbol": symbol,
+                    "side": signal,
+                    "qty": explicit_qty,
+                    "leverage": leverage,
+                    "allocated_margin": allocated_margin,
+                    "effective_allocated_margin": effective_allocated_margin,
+                    "stop_loss_price": sizing["stop_loss_price"],
+                    "take_profit_price": sizing["take_profit_price"],
+                    "entry_risk_limits": entry_limit,
+                },
+                "guard": guard,
+                "market_data": market_meta,
+            }
         result = broker.place_order(
             symbol=symbol, side=signal, price=price, leverage=leverage,
             allocated_margin=effective_allocated_margin,
@@ -736,6 +907,12 @@ def _run_single_symbol_cycle(
         )
         action = "open" if result.get("ok") else "rejected"
         logger.info("[%s] %s %s @ %s (margin=%.0f, sl=%.1f)", symbol, action, signal, price, effective_allocated_margin, sizing["stop_loss_price"])
+
+        # MACD 趋势策略：开仓后初始化 best_price 跟踪
+        if result.get("ok") and strategy_type == "macd_trend" and extra_meta and extra_meta.get("best_price"):
+            new_pos = next((p for p in broker.positions if p.symbol == symbol), None)
+            if new_pos is not None:
+                new_pos.best_price = float(extra_meta["best_price"])
         if trade_mode == "live" and str(result.get("error", "")).startswith("stop_loss_order_failed"):
             halt_reason = "实盘止损挂单失败，系统已尝试保护性平仓，请人工确认后再恢复机器人"
             save_runner_state({
@@ -762,15 +939,33 @@ def _run_single_symbol_cycle(
         }
 
     if existing is not None:
-        mark_result = broker.update_mark_price(
-            symbol, price, source="runner",
-            meta={"runner": True, "strategy_type": strategy_type, "signal": signal, "mark_price": price},
-            persist=False,
+        mark_result = (
+            {"ok": True, "symbol": symbol, "mark_price": price, "dry_run": True}
+            if dry_run else
+            broker.update_mark_price(
+                symbol, price, source="runner",
+                meta={"runner": True, "strategy_type": strategy_type, "signal": signal, "mark_price": price},
+                persist=False,
+            )
         )
         stop_loss_price, take_profit_price = _extract_position_targets(existing, stop_loss_pct, take_profit_pct, broker=broker)
 
+        # MACD 趋势策略：动态跟踪止损
+        if strategy_type == "macd_trend":
+            trailing_stop = _compute_trailing_stop(config, df, existing)
+            if trailing_stop is not None:
+                stop_loss_price = trailing_stop
+            # MACD 策略不使用固定止盈，用一个极值代替
+            if existing.side == "long":
+                take_profit_price = price * 100
+            else:
+                take_profit_price = price * 0.001
+            # best_price/bars_held 已更新，需要持久化
+            if not dry_run:
+                broker._persist()
+
         # 实盘：同步更新交易所端止损单
-        if trade_mode == "live" and stop_loss_price and stop_loss_price > 0:
+        if not dry_run and trade_mode == "live" and stop_loss_price and stop_loss_price > 0:
             try:
                 broker.update_stop_loss(symbol, stop_loss_price)
             except Exception:
@@ -779,6 +974,21 @@ def _run_single_symbol_cycle(
         close_reason, trigger_price = _resolve_exit_trigger(existing, stop_loss_price, take_profit_price, candle_high, candle_low)
 
         if close_reason and trigger_price is not None:
+            if dry_run:
+                return {
+                    "ok": True,
+                    "dry_run": True,
+                    "symbol": symbol,
+                    "action": "would_close",
+                    "close_reason": close_reason,
+                    "signal": signal,
+                    "price": price,
+                    "trigger_price": trigger_price,
+                    "stop_loss_price": stop_loss_price,
+                    "take_profit_price": take_profit_price,
+                    "guard": guard,
+                    "market_data": market_meta,
+                }
             return _close_position_from_trigger(
                 symbol=symbol,
                 strategy_type=strategy_type,
@@ -797,7 +1007,7 @@ def _run_single_symbol_cycle(
             )
 
         return {
-            "ok": True, "symbol": symbol, "action": "mark", "signal": signal, "price": price,
+            "ok": True, "symbol": symbol, "action": "would_mark" if dry_run else "mark", "signal": signal, "price": price,
             "result": mark_result, "guard": guard, "market_data": market_meta,
         }
 

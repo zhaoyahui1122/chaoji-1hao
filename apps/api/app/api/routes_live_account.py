@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from app.schemas.live_account import LiveAccountConnectRequest
@@ -6,7 +6,7 @@ from app.services.live_account_service import connect_live_account, refresh_live
 from app.services.live_account_session import get_live_account_session
 from app.services.gate_live_account import fetch_contract_detail
 from app.core.state import LIVE_BROKER
-from app.services.auth_service import AuthenticationError, require_operation_token
+from app.services.auth_service import AuthenticationError, SESSION_COOKIE_NAME, require_operation_token
 
 router = APIRouter()
 
@@ -29,9 +29,13 @@ def get_live_account_status():
 
 
 @router.post("/connect")
-def connect_live_account_route(payload: LiveAccountConnectRequest):
+def connect_live_account_route(payload: LiveAccountConnectRequest, request: Request):
     try:
-        require_operation_token(getattr(payload, "operation_token", None), "live_connect")
+        require_operation_token(
+            getattr(payload, "operation_token", None),
+            "live_connect",
+            session_token=request.cookies.get(SESSION_COOKIE_NAME, ""),
+        )
     except AuthenticationError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
     try:
@@ -76,9 +80,13 @@ class LiveCloseRequest(BaseModel):
 
 
 @router.post("/close")
-def close_live_position(payload: LiveCloseRequest):
+def close_live_position(payload: LiveCloseRequest, request: Request):
     try:
-        require_operation_token(payload.operation_token, "live_close_position")
+        require_operation_token(
+            payload.operation_token,
+            "live_close_position",
+            session_token=request.cookies.get(SESSION_COOKIE_NAME, ""),
+        )
     except AuthenticationError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
     try:
@@ -99,10 +107,14 @@ def close_live_position(payload: LiveCloseRequest):
 
 
 @router.post("/close-all")
-def close_all_live_positions(payload: dict | None = None):
+def close_all_live_positions(request: Request, payload: dict | None = None):
     token = (payload or {}).get("operation_token") if isinstance(payload, dict) else None
     try:
-        require_operation_token(token, "live_close_all")
+        require_operation_token(
+            token,
+            "live_close_all",
+            session_token=request.cookies.get(SESSION_COOKIE_NAME, ""),
+        )
     except AuthenticationError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
     try:

@@ -13,14 +13,15 @@ from app.services.strategy_runner import (
 )
 from app.core.state import PAPER_BROKER
 from app.services.contract_metrics import reset_drawdown_tracker
-from app.services.auth_service import AuthenticationError, require_operation_token
+from app.services.auth_service import AuthenticationError, SESSION_COOKIE_NAME, require_operation_token
+from app.services.runner_state_store import load_runner_state
 
 router = APIRouter()
 
 Timeframe = Literal["5m", "15m", "30m", "1h", "4h"]
 Symbol = str
 DataSource = Literal["mock", "gate"]
-StrategyType = Literal["classic", "turtle", "ict"]
+StrategyType = Literal["classic", "turtle", "ict", "macd_trend"]
 TradeMode = Literal["paper", "live"]
 DirectionMode = Literal["auto", "long_only", "short_only"]
 
@@ -76,6 +77,14 @@ class RunnerRequest(BaseModel):
     ict_cooldown_bars: int = Field(default=4, ge=0, le=100)
     ict_require_trend: bool = Field(default=True)
 
+    # MACD trend strategy params
+    macd_trend_enabled: bool = True
+    macd_divergence_enabled: bool = True
+    macd_signal_expiry: int = Field(default=20, ge=3, le=100)
+    macd_breakout_lookback: int = Field(default=20, ge=5, le=100)
+    macd_divergence_confirm_lookback: int = Field(default=10, ge=3, le=50)
+    macd_trailing_stop_pct: float = Field(default=2.0, ge=0.5, le=20.0)
+
     # Adaptive strategy params (ADX + RSI mean reversion)
     turtle_adx_period: int = Field(default=14, ge=2, le=100)
     turtle_adx_threshold: float = Field(default=25.0, ge=10.0, le=50.0)
@@ -93,6 +102,7 @@ class RunnerRequest(BaseModel):
     fee_rate: float = Field(default=0.00015, ge=0, le=0.01)
     slippage_rate: float = Field(default=0.0001, ge=0, le=0.01)
     operation_token: str | None = None
+    dry_run: bool = False
 
     @field_validator("symbols")
     @classmethod
@@ -118,12 +128,20 @@ class RunnerToggleRequest(BaseModel):
         return unique or None
 
 
+class RunnerResumeRequest(BaseModel):
+    operation_token: str | None = None
+
+
 @router.post("/run-once")
 @limiter.limit("10/minute")
 def run_once(request: Request, payload: RunnerRequest):
-    if payload.trade_mode == "live":
+    if payload.trade_mode == "live" and not payload.dry_run:
         try:
-            require_operation_token(payload.operation_token, "runner_live_trade")
+            require_operation_token(
+                payload.operation_token,
+                "runner_live_trade",
+                session_token=request.cookies.get(SESSION_COOKIE_NAME, ""),
+            )
         except AuthenticationError as exc:
             raise HTTPException(status_code=403, detail=str(exc)) from exc
     return run_strategy_cycle(payload.model_dump())
@@ -145,7 +163,11 @@ def toggle(request: Request, payload: RunnerToggleRequest):
     if payload.enabled:
         action = "runner_toggle_live" if payload.trade_mode == "live" else "runner_toggle"
         try:
-            require_operation_token(payload.operation_token, action)
+            require_operation_token(
+                payload.operation_token,
+                action,
+                session_token=request.cookies.get(SESSION_COOKIE_NAME, ""),
+            )
         except AuthenticationError as exc:
             raise HTTPException(status_code=403, detail=str(exc)) from exc
     return set_runner_enabled(payload.enabled, payload.symbols, trade_mode=payload.trade_mode)
@@ -153,7 +175,17 @@ def toggle(request: Request, payload: RunnerToggleRequest):
 
 @router.post("/resume")
 @limiter.limit("10/minute")
-def resume(request: Request):
+def resume(request: Request, payload: RunnerResumeRequest | None = None):
+    state = load_runner_state()
+    if state.get("trade_mode") == "live":
+        try:
+            require_operation_token(
+                payload.operation_token if payload else None,
+                "runner_resume_live",
+                session_token=request.cookies.get(SESSION_COOKIE_NAME, ""),
+            )
+        except AuthenticationError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
     return resume_runner()
 
 

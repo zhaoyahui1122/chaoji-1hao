@@ -1,5 +1,3 @@
-import type React from 'react'
-
 export type DashboardRunner = {
   enabled: boolean
   is_running: boolean
@@ -98,7 +96,7 @@ export type StrategyConfig = {
   symbol: 'BTC_USDT' | 'ETH_USDT'
   symbols?: Array<'BTC_USDT' | 'ETH_USDT'>
   timeframe: '5m' | '15m' | '30m' | '1h' | '4h'
-  strategy_type: 'classic' | 'turtle' | 'ict'
+  strategy_type: 'classic' | 'turtle' | 'ict' | 'macd_trend'
   leverage: number
   use_boll: boolean
   boll_period: number
@@ -136,6 +134,14 @@ export type StrategyConfig = {
   ict_min_fvg_width_pct?: number
   ict_cooldown_bars?: number
   ict_require_trend?: boolean
+  macd_trend_enabled?: boolean
+  macd_divergence_enabled?: boolean
+  macd_signal_expiry?: number
+  macd_breakout_lookback?: number
+  macd_divergence_confirm_lookback?: number
+  macd_trailing_stop_pct?: number
+  macd_trailing_decay_base?: number
+  macd_trailing_decay_floor?: number
   stop_loss_pct: number
   take_profit_pct: number
   risk_per_trade_pct: number
@@ -288,7 +294,7 @@ export type BacktestInput = {
   data_source?: string
   symbol?: string
   timeframe?: string
-  strategy_type?: 'classic' | 'turtle' | 'ict'
+  strategy_type?: 'classic' | 'turtle' | 'ict' | 'macd_trend'
   leverage?: number
   initial_balance?: number
   allocated_margin?: number
@@ -393,7 +399,7 @@ export type RunnerLogItem = {
   config?: {
     symbol?: string
     timeframe?: string
-    strategy_type?: 'classic' | 'turtle' | 'ict'
+    strategy_type?: 'classic' | 'turtle' | 'ict' | 'macd_trend'
     [key: string]: unknown
   }
   result?: RunnerExecutionResult | null
@@ -409,86 +415,3 @@ export type HistoryFilters = {
   end_time: string
   trade_mode: string
 }
-
-export const surfaceStyle: React.CSSProperties = {
-  border: '1px solid rgba(255, 255, 255, 0.08)',
-  borderRadius: 24,
-  background: 'linear-gradient(180deg, rgba(16,18,24,0.96) 0%, rgba(11,13,18,0.98) 100%)',
-  boxShadow: '0 22px 44px rgba(0, 0, 0, 0.22)',
-  backdropFilter: 'blur(10px)',
-}
-
-export const cardStyle: React.CSSProperties = {
-  ...surfaceStyle,
-  padding: 20,
-}
-
-export const compactCardStyle: React.CSSProperties = {
-  ...surfaceStyle,
-  padding: 18,
-}
-
-export const labelStyle: React.CSSProperties = {
-  fontSize: 12,
-  color: '#9ca3af',
-  marginBottom: 8,
-  textTransform: 'uppercase',
-  letterSpacing: '0.08em',
-}
-
-export const valueStyle: React.CSSProperties = {
-  fontSize: 28,
-  fontWeight: 800,
-  letterSpacing: '-0.03em',
-}
-
-export const sectionTitleStyle: React.CSSProperties = {
-  margin: 0,
-  fontSize: 24,
-  fontWeight: 800,
-  letterSpacing: '-0.03em',
-  color: '#f9fafb',
-}
-
-export const sectionHintStyle: React.CSSProperties = {
-  margin: '6px 0 0',
-  color: '#9ca3af',
-  fontSize: 13,
-  lineHeight: 1.6,
-}
-
-export const metricCardStyle: React.CSSProperties = {
-  ...compactCardStyle,
-  display: 'grid',
-  gap: 10,
-  minHeight: 126,
-}
-
-export const metricValueLgStyle: React.CSSProperties = {
-  fontSize: 30,
-  fontWeight: 800,
-  letterSpacing: '-0.04em',
-  color: '#f9fafb',
-}
-
-export const metricSubtleRowStyle: React.CSSProperties = {
-  display: 'flex',
-  justifyContent: 'space-between',
-  gap: 12,
-  alignItems: 'center',
-  color: '#9ca3af',
-  fontSize: 12,
-}
-
-export const chipStyle = (colors: { color: string; background: string }): React.CSSProperties => ({
-  display: 'inline-flex',
-  alignItems: 'center',
-  gap: 6,
-  borderRadius: 999,
-  padding: '5px 10px',
-  fontSize: 12,
-  fontWeight: 700,
-  letterSpacing: '0.01em',
-  color: colors.color,
-  background: colors.background,
-})

@@ -1,7 +1,7 @@
 import { expect, type APIRequestContext, type Page } from '@playwright/test'
 
 export const WEB_BASE_URL = process.env.PLAYWRIGHT_BASE_URL || 'http://127.0.0.1:3100'
-export const API_BASE_URL = process.env.PLAYWRIGHT_API_BASE_URL || 'http://127.0.0.1:8001'
+export const API_BASE_URL = process.env.PLAYWRIGHT_API_BASE_URL || 'http://127.0.0.1:8012'
 export const ADMIN_USERNAME = process.env.PLAYWRIGHT_ADMIN_USERNAME || 'admin'
 export const ADMIN_PASSWORD = process.env.PLAYWRIGHT_ADMIN_PASSWORD || '666666'
 

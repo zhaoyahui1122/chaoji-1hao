@@ -31,6 +31,8 @@ class PaperPosition:
     cumulative_slippage_cost: float = 0.0
     stop_loss_price: float = 0.0
     take_profit_price: float = 0.0
+    best_price: float = 0.0
+    trailing_bars_held: int = 0
 
 
 @dataclass

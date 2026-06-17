@@ -1,13 +1,14 @@
 import os
 from fastapi.testclient import TestClient
 
+
+
+os.environ["ADMIN_USERNAME"] = "admin"
+os.environ["ADMIN_PASSWORD_HASH"] = "fcf730b6d95236ecd3c9fc2d92d7b6b2bb061514961aec041d6c7a7192f592e4"
+os.environ["SESSION_SECRET"] = "test-session-secret"
+
 from app.main import app
 from app.services.live_account_session import clear_live_account_session
-
-
-os.environ.setdefault("ADMIN_USERNAME", "admin")
-os.environ.setdefault("ADMIN_PASSWORD_HASH", "fcf730b6d95236ecd3c9fc2d92d7b6b2bb061514961aec041d6c7a7192f592e4")
-os.environ.setdefault("SESSION_SECRET", "test-session-secret")
 
 client = TestClient(app)
 

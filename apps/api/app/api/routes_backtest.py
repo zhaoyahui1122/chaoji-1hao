@@ -14,7 +14,7 @@ router = APIRouter()
 Timeframe = Literal["5m", "15m", "30m", "1h", "4h"]
 Symbol = str
 DataSource = Literal["mock", "gate"]
-StrategyType = Literal["classic", "turtle", "ict"]
+StrategyType = Literal["classic", "turtle", "ict", "macd_trend"]
 
 
 class BacktestRequest(BaseModel):
@@ -88,6 +88,16 @@ class BacktestRequest(BaseModel):
     ict_require_trend: bool = Field(default=True)
     ict_fvg_max_bars: int = Field(default=100, ge=10, le=500)
     ict_fvg_tolerance_pct: float = Field(default=0.03, ge=0.0, le=0.1)
+
+    # MACD trend strategy params
+    macd_trend_enabled: bool = True
+    macd_divergence_enabled: bool = True
+    macd_signal_expiry: int = Field(default=20, ge=3, le=100)
+    macd_breakout_lookback: int = Field(default=20, ge=5, le=100)
+    macd_divergence_confirm_lookback: int = Field(default=10, ge=3, le=50)
+    macd_trailing_stop_pct: float = Field(default=2.0, ge=0.5, le=20.0)
+    macd_trailing_decay_base: float = Field(default=0.98, ge=0.8, le=1.0)
+    macd_trailing_decay_floor: float = Field(default=0.3, ge=0.05, le=0.8)
 
 
 class BacktestSummary(BaseModel):

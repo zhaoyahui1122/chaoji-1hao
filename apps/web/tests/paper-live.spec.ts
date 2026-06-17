@@ -3,6 +3,13 @@ import { expect, test } from '@playwright/test'
 import { authedGet, authedPost, loginToDashboard } from './helpers'
 
 test.describe('Paper trading window live integration', () => {
+  test('未登录访问实盘账户页时不暴露 API Key 表单', async ({ page }) => {
+    await page.goto('/live-account')
+    await expect(page.locator('input[autocomplete="username"]')).toBeVisible()
+    await expect(page.getByPlaceholder('输入 Gate.io API Key')).toHaveCount(0)
+    await expect(page.getByPlaceholder('输入 Gate.io API Secret')).toHaveCount(0)
+  })
+
   test('paper 窗口可加载实时价格并执行精确仓位链路', async ({ page }) => {
     await authedPost(page.request, '/runner/reset-paper', {})
     await loginToDashboard(page)

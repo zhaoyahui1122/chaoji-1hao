@@ -18,6 +18,7 @@ from app.strategy.ict import (
     _find_fvg,
     _find_engulfing,
 )
+from app.strategy.macd_trend import prepare_signals as macd_prepare_signals
 
 
 @dataclass
@@ -90,6 +91,8 @@ class SimpleBacktester:
             return self._run_ict(df, df_1h, df_4h, config)
         if strategy_type == "turtle":
             return self._run_turtle(df, config)
+        if strategy_type == "macd_trend":
+            return self._run_macd_trend(df, config)
         return self._run_classic(df, config)
 
     def _run_classic(self, df: pd.DataFrame, config: dict[str, Any]) -> BacktestResult:
@@ -581,6 +584,171 @@ class SimpleBacktester:
                         }
                         last_entry_bar = i
                         break  # 一次只开一个仓位
+
+            # === 权益曲线 ===
+            unrealized = 0.0
+            if position is not None:
+                if position["side"] == "long":
+                    mark_exit = self._apply_slippage("long", price, slippage_rate, is_close=True)
+                    unrealized = (mark_exit - position["entry_price"]) * position["qty"] - self._calc_fee(mark_exit * position["qty"], fee_rate)
+                else:
+                    mark_exit = self._apply_slippage("short", price, slippage_rate, is_close=True)
+                    unrealized = (position["entry_price"] - mark_exit) * position["qty"] - self._calc_fee(mark_exit * position["qty"], fee_rate)
+            equity_curve.append({"timestamp": ts, "equity": balance + unrealized})
+
+        return self._build_result(trades, equity_curve)
+
+    def _run_macd_trend(self, df: pd.DataFrame, config: dict[str, Any]) -> BacktestResult:
+        """MACD trend + divergence strategy with dynamic trailing stop."""
+        data = macd_prepare_signals(df, config)
+
+        balance = self.initial_balance
+        equity_curve: list[dict[str, Any]] = []
+        trades: list[BacktestTrade] = []
+        position = None
+        trailing_stop = 0.0
+        best_price = 0.0  # highest high for long, lowest low for short
+
+        risk_per_trade_pct = float(config.get("risk_per_trade_pct", 0.01))
+        stop_loss_pct = float(config.get("stop_loss_pct", 0.02))
+        take_profit_pct = float(config.get("take_profit_pct", 0.04))
+        fee_rate = float(config.get("fee_rate", 0.00015))
+        slippage_rate = float(config.get("slippage_rate", 0.0001))
+        trailing_pct = float(config.get("macd_trailing_stop_pct", 2.0)) / 100.0
+        breakout_lookback = int(config.get("macd_breakout_lookback", 20))
+        decay_base = float(config.get("macd_trailing_decay_base", 0.98))
+        decay_floor = float(config.get("macd_trailing_decay_floor", 0.3))
+        bars_held = 0
+
+        for bar_idx, (_, row) in enumerate(data.iterrows()):
+            price = float(row["close"])
+            candle_high = float(row.get("high", price))
+            candle_low = float(row.get("low", price))
+            ts = str(row["timestamp"])
+            signal = row.get("signal")
+            signal_source = row.get("signal_source")
+
+            # --- Open position ---
+            if position is None and signal in ("long", "short"):
+                entry_price = self._apply_slippage(signal, price, slippage_rate, is_close=False)
+                sizing = build_risk_sized_order(
+                    side=signal,
+                    account_equity=balance,
+                    entry_price=entry_price,
+                    leverage=int(config.get("leverage", 1)),
+                    risk_per_trade_pct=risk_per_trade_pct,
+                    stop_loss_pct=stop_loss_pct,
+                    take_profit_pct=take_profit_pct,
+                    allocated_margin_cap=None,
+                )
+                qty = sizing["qty"]
+                if qty > 0:
+                    entry_fee = self._calc_fee(entry_price * qty, fee_rate)
+                    balance -= entry_fee
+
+                    # Initialize trailing stop
+                    bars_held = 0
+                    if signal == "long":
+                        recent_low = float(data["low"].iloc[max(0, bar_idx - breakout_lookback):bar_idx].min()) if bar_idx > 0 else candle_low
+                        trailing_stop = recent_low * (1 - trailing_pct)
+                        best_price = candle_high
+                    else:
+                        recent_high = float(data["high"].iloc[max(0, bar_idx - breakout_lookback):bar_idx].max()) if bar_idx > 0 else candle_high
+                        trailing_stop = recent_high * (1 + trailing_pct)
+                        best_price = candle_low
+
+                    position = {
+                        "side": signal,
+                        "entry_time": ts,
+                        "entry_price": entry_price,
+                        "entry_fee": entry_fee,
+                        "entry_slippage": entry_price - price if signal == "long" else price - entry_price,
+                        "qty": qty,
+                        "stop_price": trailing_stop,
+                        "take_profit_price": 0,  # not used — trailing stop only
+                        "liquidation_price": estimate_liquidation_price(signal, entry_price, int(config.get("leverage", 1))),
+                        "signal_source": signal_source,
+                    }
+
+            # --- Update trailing stop / close position ---
+            elif position is not None:
+                exit_reason = None
+                trigger_price = price
+                bars_held += 1
+
+                # Decay coefficient: trailing tightens over time
+                decay = max(decay_floor, decay_base ** bars_held)
+                effective_pct = trailing_pct * decay
+
+                if position["side"] == "long":
+                    # Update trailing: track highest high
+                    if candle_high > best_price:
+                        best_price = candle_high
+                    new_stop = best_price * (1 - effective_pct)
+                    trailing_stop = max(trailing_stop, new_stop)
+
+                    # Check exit conditions
+                    if candle_low <= position.get("liquidation_price", 0) and position.get("liquidation_price", 0) > 0:
+                        exit_reason = "liquidation"
+                        trigger_price = position["liquidation_price"]
+                    elif candle_low <= trailing_stop:
+                        exit_reason = "trailing_stop"
+                        trigger_price = trailing_stop
+                    elif signal == "short":
+                        exit_reason = "reverse_signal"
+
+                    exit_price = self._apply_slippage("long", trigger_price, slippage_rate, is_close=True)
+                    gross_pnl = (exit_price - position["entry_price"]) * position["qty"]
+                else:
+                    # Update trailing: track lowest low
+                    if candle_low < best_price:
+                        best_price = candle_low
+                    new_stop = best_price * (1 + effective_pct)
+                    trailing_stop = min(trailing_stop, new_stop)
+
+                    if candle_high >= position.get("liquidation_price", 0) and position.get("liquidation_price", 0) > 0:
+                        exit_reason = "liquidation"
+                        trigger_price = position["liquidation_price"]
+                    elif candle_high >= trailing_stop:
+                        exit_reason = "trailing_stop"
+                        trigger_price = trailing_stop
+                    elif signal == "long":
+                        exit_reason = "reverse_signal"
+
+                    exit_price = self._apply_slippage("short", trigger_price, slippage_rate, is_close=True)
+                    gross_pnl = (position["entry_price"] - exit_price) * position["qty"]
+
+                if exit_reason:
+                    exit_fee = self._calc_fee(exit_price * position["qty"], fee_rate)
+                    total_fee = position["entry_fee"] + exit_fee
+                    pnl = gross_pnl - total_fee
+                    pnl_pct = pnl / balance if balance > 0 else 0
+                    balance += gross_pnl - exit_fee
+                    trades.append(
+                        BacktestTrade(
+                            side=position["side"],
+                            entry_time=position["entry_time"],
+                            exit_time=ts,
+                            entry_price=position["entry_price"],
+                            exit_price=exit_price,
+                            qty=position["qty"],
+                            gross_pnl=gross_pnl,
+                            fee=total_fee,
+                            pnl=pnl,
+                            pnl_pct=pnl_pct,
+                            reason=exit_reason,
+                            entry_slippage=position["entry_slippage"],
+                            exit_slippage=exit_price - price if position["side"] == "long" else price - exit_price,
+                            leverage=float(config.get("leverage", 1)),
+                            status="closed",
+                            cumulative_fees=total_fee,
+                            cumulative_slippage_cost=(position["entry_slippage"] + (exit_price - price if position["side"] == "long" else price - exit_price)) * position["qty"],
+                        )
+                    )
+                    position = None
+                    trailing_stop = 0.0
+                    best_price = 0.0
+                    bars_held = 0
 
             # === 权益曲线 ===
             unrealized = 0.0

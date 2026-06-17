@@ -149,33 +149,99 @@ def authenticate(username: str, password: str) -> AuthSettings:
     return settings
 
 
-def create_operation_token(action: str, secret: str, ttl_seconds: int = OPERATION_TOKEN_TTL_SECONDS) -> str:
+def create_operation_token(
+    action: str,
+    secret: str,
+    ttl_seconds: int = OPERATION_TOKEN_TTL_SECONDS,
+    session_jti: str | None = None,
+) -> str:
     payload = {
         "op": action,
         "exp": int(time.time()) + ttl_seconds,
         "jti": secrets.token_urlsafe(18),
     }
+    if session_jti:
+        payload["session_jti"] = session_jti
     payload_b64 = _urlsafe_b64encode(json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8"))
     signature = _sign(payload_b64, secret)
     return f"{payload_b64}.{signature}"
 
 
-def parse_operation_token(token: str, secret: str, expected_action: str) -> dict[str, Any] | None:
+def parse_operation_token(
+    token: str,
+    secret: str,
+    expected_action: str,
+    session_token: str | None = None,
+) -> dict[str, Any] | None:
     payload = parse_session_token(token, secret, require_session_active=False)
     if not payload or payload.get("op") != expected_action:
         return None
+    expected_session_jti = payload.get("session_jti")
+    if expected_session_jti:
+        session_payload = parse_session_token(session_token or "", secret)
+        if not session_payload or session_payload.get("jti") != expected_session_jti:
+            return None
     return payload
 
 
-def verify_operation_token(token: str | None, expected_action: str) -> bool:
+def _used_operation_store_key() -> str:
+    return "used_operation_tokens"
+
+
+def _load_used_operation_tokens() -> dict[str, int]:
+    try:
+        from app.services.db import load_kv
+        data = load_kv("auth", _used_operation_store_key(), {})
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _save_used_operation_tokens(data: dict[str, int]) -> None:
+    try:
+        from app.services.db import save_kv
+        save_kv("auth", _used_operation_store_key(), data)
+    except Exception:
+        pass
+
+
+def _consume_operation_token_jti(jti: str, exp: int) -> bool:
+    if not jti or exp <= int(time.time()):
+        return False
+    used = {k: v for k, v in _load_used_operation_tokens().items() if int(v or 0) > int(time.time())}
+    if jti in used:
+        return False
+    used[jti] = exp
+    _save_used_operation_tokens(used)
+    return True
+
+
+def verify_operation_token(
+    token: str | None,
+    expected_action: str,
+    session_token: str | None = None,
+    *,
+    consume: bool = False,
+) -> bool:
     if not token:
         return False
     settings = load_auth_settings(required=True)
-    return parse_operation_token(token, settings.session_secret, expected_action) is not None
+    payload = parse_operation_token(token, settings.session_secret, expected_action, session_token=session_token)
+    if payload is None:
+        return False
+    if consume:
+        return _consume_operation_token_jti(str(payload.get("jti") or ""), int(payload.get("exp") or 0))
+    return True
 
 
-def require_operation_token(token: str | None, expected_action: str) -> None:
-    if not verify_operation_token(token, expected_action):
+def require_operation_token(
+    token: str | None,
+    expected_action: str,
+    session_token: str | None = None,
+    *,
+    consume: bool = True,
+) -> None:
+    if not verify_operation_token(token, expected_action, session_token=session_token, consume=consume):
         raise AuthenticationError(f"Operation confirmation required: {expected_action}")
 
 

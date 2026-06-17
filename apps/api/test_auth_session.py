@@ -20,7 +20,9 @@ def auth_env(
         "ADMIN_USERNAME": os.environ.get("ADMIN_USERNAME"),
         "ADMIN_PASSWORD_HASH": os.environ.get("ADMIN_PASSWORD_HASH"),
         "SESSION_SECRET": os.environ.get("SESSION_SECRET"),
+        "QUANT_GATE_SKIP_DOTENV": os.environ.get("QUANT_GATE_SKIP_DOTENV"),
     }
+    os.environ["QUANT_GATE_SKIP_DOTENV"] = "1"
     if username:
         os.environ["ADMIN_USERNAME"] = username
     else:

@@ -66,9 +66,17 @@ def logout(request: Request, response: Response):
 
 
 @router.post("/operation-token")
-def operation_token(payload: OperationTokenRequest):
+def operation_token(payload: OperationTokenRequest, request: Request):
     settings = load_auth_settings(required=True)
-    token = create_operation_token(payload.action, settings.session_secret)
+    session_token = request.cookies.get(SESSION_COOKIE_NAME, "")
+    session_payload = parse_session_token(session_token, settings.session_secret)
+    if not session_payload:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    token = create_operation_token(
+        payload.action,
+        settings.session_secret,
+        session_jti=str(session_payload.get("jti") or ""),
+    )
     return {"operation_token": token, "action": payload.action}
 
 

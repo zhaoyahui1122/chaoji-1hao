@@ -98,7 +98,7 @@ def place_order(payload: PlaceOrderRequest):
             "take_profit_price": sizing["take_profit_price"],
         }
 
-    return PAPER_BROKER.place_order(
+    result = PAPER_BROKER.place_order(
         symbol=payload.symbol,
         side=payload.side,
         price=payload.price,
@@ -111,6 +111,7 @@ def place_order(payload: PlaceOrderRequest):
         qty=explicit_qty,
         meta=extra_meta or None,
     )
+    return {**result, "snapshot": PAPER_BROKER.snapshot()}
 
 
 @router.post("/mark")

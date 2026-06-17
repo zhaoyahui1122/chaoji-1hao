@@ -1,55 +1,41 @@
-import type React from 'react'
-import {
-  sidebarMetricCardStyle,
-  sidebarMetricLabelStyle,
-  sidebarMetricValueStyle,
-  heroMiniStatStyle,
-  heroMiniLabelStyle,
-  heroMiniValueStyle,
-  sectionTitleStyle,
-  sectionHintStyle,
-  eyebrowStyle,
-} from './dashboard-layout-styles'
+import { Card } from '@/components/ui/card'
 
 type Tone = 'cyan' | 'blue' | 'green' | 'violet' | 'slate' | 'amber'
 
-const toneMap: Record<Tone, { border: string; glow: string; value: string }> = {
-  cyan: { border: 'rgba(255,255,255,0.08)', glow: 'rgba(0,0,0,0.18)', value: '#f3f4f6' },
-  blue: { border: 'rgba(255,255,255,0.08)', glow: 'rgba(0,0,0,0.18)', value: '#f3f4f6' },
-  green: { border: 'rgba(34,197,94,0.2)', glow: 'rgba(0,0,0,0.18)', value: '#4ade80' },
-  violet: { border: 'rgba(255,255,255,0.08)', glow: 'rgba(0,0,0,0.18)', value: '#f3f4f6' },
-  slate: { border: 'rgba(255,255,255,0.08)', glow: 'rgba(0,0,0,0.18)', value: '#e5e7eb' },
-  amber: { border: 'rgba(255,255,255,0.08)', glow: 'rgba(0,0,0,0.18)', value: '#f3f4f6' },
+const toneColors: Record<Tone, string> = {
+  cyan: 'text-accent-cyan',
+  blue: 'text-accent-blue',
+  green: 'text-accent-green',
+  violet: 'text-accent-violet',
+  slate: 'text-text-secondary',
+  amber: 'text-accent-amber',
 }
 
 export function MetricCard({ label, value, tone }: { label: string; value: string; tone: Tone }) {
-  const palette = toneMap[tone]
   return (
-    <div style={{ ...sidebarMetricCardStyle, border: `1px solid ${palette.border}`, boxShadow: `inset 0 0 0 1px rgba(255,255,255,0.02), 0 14px 28px ${palette.glow}` }}>
-      <div style={sidebarMetricLabelStyle}>{label}</div>
-      <div style={{ ...sidebarMetricValueStyle, color: palette.value }}>{value}</div>
-    </div>
+    <Card className="bg-bg-card border-border p-3">
+      <div className="text-[11px] uppercase tracking-[0.08em] text-text-muted">{label}</div>
+      <div className={`mt-1 text-lg font-extrabold ${toneColors[tone]}`}>{value}</div>
+    </Card>
   )
 }
 
 export function HeroMiniStat({ label, value }: { label: string; value: string }) {
   return (
-    <div style={heroMiniStatStyle}>
-      <div style={{ ...heroMiniLabelStyle, display: 'flex', alignItems: 'center', gap: 8 }}>
-        <span style={{ width: 8, height: 8, borderRadius: 999, background: '#6b7280' }} />
-        {label}
-      </div>
-      <div style={heroMiniValueStyle}>{value}</div>
+    <div className="flex items-center gap-2 text-sm">
+      <span className="inline-block h-2 w-2 rounded-full bg-text-muted" />
+      <span className="text-text-muted">{label}</span>
+      <span className="font-bold text-text-primary">{value}</span>
     </div>
   )
 }
 
 export function SectionHeader({ title, hint }: { title: string; hint: string }) {
   return (
-    <div style={{ marginBottom: 16 }}>
-      <div style={eyebrowStyle}>Workspace Panel</div>
-      <h3 style={sectionTitleStyle}>{title}</h3>
-      <p style={sectionHintStyle}>{hint}</p>
+    <div className="mb-4">
+      <div className="text-[11px] uppercase tracking-[0.08em] text-text-muted">Workspace Panel</div>
+      <h3 className="mt-1 text-lg font-extrabold text-text-primary">{title}</h3>
+      <p className="mt-1 text-sm text-text-secondary">{hint}</p>
     </div>
   )
 }

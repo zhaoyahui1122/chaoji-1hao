@@ -27,7 +27,7 @@ class StrategyConfig(BaseModel):
     symbol: Symbol = "BTC_USDT"
     symbols: list[Symbol] | None = None
     timeframe: Timeframe = "15m"
-    strategy_type: Literal["classic", "turtle", "ict"] = "classic"
+    strategy_type: Literal["classic", "turtle", "ict", "macd_trend"] = "classic"
     leverage: int = Field(default=5, ge=1, le=150)
     use_boll: bool = True
     boll_period: int = Field(default=20, ge=5, le=200)
@@ -62,6 +62,14 @@ class StrategyConfig(BaseModel):
     ict_min_fvg_width_pct: float = Field(default=0.0, ge=0.0, le=0.01)
     ict_cooldown_bars: int = Field(default=4, ge=0, le=100)
     ict_require_trend: bool = Field(default=True)
+    macd_trend_enabled: bool = True
+    macd_divergence_enabled: bool = True
+    macd_signal_expiry: int = Field(default=20, ge=3, le=100)
+    macd_breakout_lookback: int = Field(default=20, ge=5, le=100)
+    macd_divergence_confirm_lookback: int = Field(default=10, ge=3, le=50)
+    macd_trailing_stop_pct: float = Field(default=2.0, ge=0.5, le=20.0)
+    macd_trailing_decay_base: float = Field(default=0.98, ge=0.8, le=1.0)
+    macd_trailing_decay_floor: float = Field(default=0.3, ge=0.05, le=0.8)
     stop_loss_pct: float = Field(default=0.02, gt=0, le=0.5)
     take_profit_pct: float = Field(default=0.05, gt=0, le=2.0)
     risk_per_trade_pct: float = Field(default=0.01, gt=0, le=0.1)
