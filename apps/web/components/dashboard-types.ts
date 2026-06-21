@@ -96,7 +96,7 @@ export type StrategyConfig = {
   symbol: 'BTC_USDT' | 'ETH_USDT'
   symbols?: Array<'BTC_USDT' | 'ETH_USDT'>
   timeframe: '5m' | '15m' | '30m' | '1h' | '4h'
-  strategy_type: 'classic' | 'turtle' | 'ict' | 'macd_trend'
+  strategy_type: 'classic' | 'turtle' | 'ict' | 'ifvg' | 'macd_trend'
   leverage: number
   use_boll: boolean
   boll_period: number
@@ -134,6 +134,13 @@ export type StrategyConfig = {
   ict_min_fvg_width_pct?: number
   ict_cooldown_bars?: number
   ict_require_trend?: boolean
+  ifvg_risk_reward?: number
+  ifvg_fvg_lookback?: number
+  ifvg_min_fvg_width_pct?: number
+  ifvg_bias_ema_period?: number
+  ifvg_session?: 'any' | 'asia' | 'london' | 'new_york_am'
+  ifvg_require_bias?: boolean
+  ifvg_one_shot_per_session?: boolean
   macd_trend_enabled?: boolean
   macd_divergence_enabled?: boolean
   macd_signal_expiry?: number
@@ -294,7 +301,7 @@ export type BacktestInput = {
   data_source?: string
   symbol?: string
   timeframe?: string
-  strategy_type?: 'classic' | 'turtle' | 'ict' | 'macd_trend'
+  strategy_type?: 'classic' | 'turtle' | 'ict' | 'ifvg' | 'macd_trend'
   leverage?: number
   initial_balance?: number
   allocated_margin?: number
@@ -399,7 +406,7 @@ export type RunnerLogItem = {
   config?: {
     symbol?: string
     timeframe?: string
-    strategy_type?: 'classic' | 'turtle' | 'ict' | 'macd_trend'
+    strategy_type?: 'classic' | 'turtle' | 'ict' | 'ifvg' | 'macd_trend'
     [key: string]: unknown
   }
   result?: RunnerExecutionResult | null

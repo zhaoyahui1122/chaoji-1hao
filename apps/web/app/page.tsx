@@ -39,6 +39,8 @@ import {
   BarChart3,
   Bot,
   Clock,
+  Eye,
+  EyeOff,
   History,
   LayoutDashboard,
   LineChart,
@@ -532,7 +534,7 @@ function DashboardPageInner({ session, onLogout }: { session: SessionResponse; o
                               <div className="rounded-2xl bg-white/[0.04] border border-white/[0.06] p-3.5">
                                 <div className="text-[11px] text-text-muted uppercase tracking-[0.08em]">策略类型</div>
                                 <div className="mt-2 text-lg font-extrabold text-text-primary">
-                                  {strategyType === 'ict' ? 'ICT' : strategyType === 'turtle' ? '海龟' : strategyType === 'macd_trend' ? 'MACD趋势' : '经典'}
+                                  {strategyType === 'ict' ? 'ICT' : strategyType === 'ifvg' ? 'IFVG' : strategyType === 'turtle' ? '海龟' : strategyType === 'macd_trend' ? 'MACD趋势' : '经典'}
                                 </div>
                               </div>
                               <div className="rounded-2xl bg-white/[0.04] border border-white/[0.06] p-3.5">
@@ -685,6 +687,7 @@ export default function HomePage() {
   const [sessionLoading, setSessionLoading] = useState(true)
   const [authError, setAuthError] = useState<string | null>(null)
   const [formState, setFormState] = useState({ username: '', password: '' })
+  const [showPassword, setShowPassword] = useState(false)
   const [submitting, setSubmitting] = useState(false)
 
   useEffect(() => {
@@ -796,14 +799,27 @@ export default function HomePage() {
 
               <div className="space-y-2">
                 <Label className="text-sm text-slate-300">密码</Label>
-                <Input
-                  type="password"
-                  value={formState.password}
-                  onChange={(event) => setFormState((prev) => ({ ...prev, password: event.target.value }))}
-                  placeholder="请输入管理员密码"
-                  autoComplete="current-password"
-                  className="rounded-2xl border-slate-600/80 bg-slate-950/50 text-text-primary placeholder:text-text-muted h-12"
-                />
+                <div className="relative">
+                  <Input
+                    type={showPassword ? 'text' : 'password'}
+                    value={formState.password}
+                    onChange={(event) => setFormState((prev) => ({ ...prev, password: event.target.value }))}
+                    placeholder="请输入管理员密码"
+                    autoComplete="current-password"
+                    className="h-12 rounded-2xl border-slate-600/80 bg-slate-950/50 pr-12 text-text-primary placeholder:text-text-muted"
+                  />
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon-sm"
+                    aria-label={showPassword ? '隐藏密码' : '显示密码'}
+                    title={showPassword ? '隐藏密码' : '显示密码'}
+                    onClick={() => setShowPassword((visible) => !visible)}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:bg-slate-800/70 hover:text-slate-100"
+                  >
+                    {showPassword ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
+                  </Button>
+                </div>
               </div>
 
               {authError && (

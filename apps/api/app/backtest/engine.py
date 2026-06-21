@@ -18,6 +18,7 @@ from app.strategy.ict import (
     _find_fvg,
     _find_engulfing,
 )
+from app.strategy.ifvg import generate_signal as ifvg_generate_signal
 from app.strategy.macd_trend import prepare_signals as macd_prepare_signals
 
 
@@ -93,6 +94,8 @@ class SimpleBacktester:
             return self._run_turtle(df, config)
         if strategy_type == "macd_trend":
             return self._run_macd_trend(df, config)
+        if strategy_type == "ifvg":
+            return self._run_ifvg(df, config)
         return self._run_classic(df, config)
 
     def _run_classic(self, df: pd.DataFrame, config: dict[str, Any]) -> BacktestResult:
@@ -751,6 +754,124 @@ class SimpleBacktester:
                     bars_held = 0
 
             # === 权益曲线 ===
+            unrealized = 0.0
+            if position is not None:
+                if position["side"] == "long":
+                    mark_exit = self._apply_slippage("long", price, slippage_rate, is_close=True)
+                    unrealized = (mark_exit - position["entry_price"]) * position["qty"] - self._calc_fee(mark_exit * position["qty"], fee_rate)
+                else:
+                    mark_exit = self._apply_slippage("short", price, slippage_rate, is_close=True)
+                    unrealized = (position["entry_price"] - mark_exit) * position["qty"] - self._calc_fee(mark_exit * position["qty"], fee_rate)
+            equity_curve.append({"timestamp": ts, "equity": balance + unrealized})
+
+        return self._build_result(trades, equity_curve)
+
+    def _run_ifvg(self, df: pd.DataFrame, config: dict[str, Any]) -> BacktestResult:
+        balance = self.initial_balance
+        equity_curve: list[dict[str, Any]] = []
+        trades: list[BacktestTrade] = []
+        position = None
+
+        risk_per_trade_pct = float(config.get("risk_per_trade_pct", 0.01))
+        fee_rate = float(config.get("fee_rate", 0.00015))
+        slippage_rate = float(config.get("slippage_rate", 0.0001))
+
+        for bar_idx, (_, row) in enumerate(df.iterrows()):
+            price = float(row["close"])
+            candle_high = float(row.get("high", price))
+            candle_low = float(row.get("low", price))
+            ts = str(row["timestamp"])
+            signal, meta = ifvg_generate_signal(df.iloc[:bar_idx + 1], config)
+
+            if position is None and signal in ("long", "short") and meta:
+                entry_price = self._apply_slippage(signal, price, slippage_rate, is_close=False)
+                stop_loss_price = float(meta["stop_loss_price"])
+                take_profit_price = float(meta["take_profit_price"])
+                stop_loss_pct = abs(entry_price - stop_loss_price) / entry_price if entry_price > 0 else 0.0
+                take_profit_pct = abs(take_profit_price - entry_price) / entry_price if entry_price > 0 else 0.0
+                sizing = build_risk_sized_order(
+                    side=signal,
+                    account_equity=balance,
+                    entry_price=entry_price,
+                    leverage=int(config.get("leverage", 1)),
+                    risk_per_trade_pct=risk_per_trade_pct,
+                    stop_loss_pct=max(stop_loss_pct, 0.0001),
+                    take_profit_pct=max(take_profit_pct, 0.0001),
+                    allocated_margin_cap=None,
+                )
+                qty = sizing["qty"]
+                if qty > 0:
+                    entry_fee = self._calc_fee(entry_price * qty, fee_rate)
+                    balance -= entry_fee
+                    position = {
+                        "side": signal,
+                        "entry_time": ts,
+                        "entry_price": entry_price,
+                        "entry_fee": entry_fee,
+                        "entry_slippage": entry_price - price if signal == "long" else price - entry_price,
+                        "qty": qty,
+                        "stop_price": stop_loss_price,
+                        "take_profit_price": take_profit_price,
+                        "liquidation_price": estimate_liquidation_price(signal, entry_price, int(config.get("leverage", 1))),
+                    }
+
+            elif position is not None:
+                exit_reason = None
+                trigger_price = price
+                if position["side"] == "long":
+                    if candle_low <= position.get("liquidation_price", 0) and position.get("liquidation_price", 0) > 0:
+                        exit_reason = "liquidation"
+                        trigger_price = position["liquidation_price"]
+                    elif candle_low <= position["stop_price"]:
+                        exit_reason = "stop_loss"
+                        trigger_price = position["stop_price"]
+                    elif candle_high >= position["take_profit_price"]:
+                        exit_reason = "take_profit"
+                        trigger_price = position["take_profit_price"]
+                    exit_price = self._apply_slippage("long", trigger_price, slippage_rate, is_close=True)
+                    gross_pnl = (exit_price - position["entry_price"]) * position["qty"]
+                else:
+                    if candle_high >= position.get("liquidation_price", 0) and position.get("liquidation_price", 0) > 0:
+                        exit_reason = "liquidation"
+                        trigger_price = position["liquidation_price"]
+                    elif candle_high >= position["stop_price"]:
+                        exit_reason = "stop_loss"
+                        trigger_price = position["stop_price"]
+                    elif candle_low <= position["take_profit_price"]:
+                        exit_reason = "take_profit"
+                        trigger_price = position["take_profit_price"]
+                    exit_price = self._apply_slippage("short", trigger_price, slippage_rate, is_close=True)
+                    gross_pnl = (position["entry_price"] - exit_price) * position["qty"]
+
+                if exit_reason:
+                    exit_fee = self._calc_fee(exit_price * position["qty"], fee_rate)
+                    total_fee = position["entry_fee"] + exit_fee
+                    pnl = gross_pnl - total_fee
+                    pnl_pct = pnl / balance if balance > 0 else 0
+                    balance += gross_pnl - exit_fee
+                    trades.append(
+                        BacktestTrade(
+                            side=position["side"],
+                            entry_time=position["entry_time"],
+                            exit_time=ts,
+                            entry_price=position["entry_price"],
+                            exit_price=exit_price,
+                            qty=position["qty"],
+                            gross_pnl=gross_pnl,
+                            fee=total_fee,
+                            pnl=pnl,
+                            pnl_pct=pnl_pct,
+                            reason=exit_reason,
+                            entry_slippage=position["entry_slippage"],
+                            exit_slippage=exit_price - price if position["side"] == "long" else price - exit_price,
+                            leverage=float(config.get("leverage", 1)),
+                            status="closed",
+                            cumulative_fees=total_fee,
+                            cumulative_slippage_cost=(position["entry_slippage"] + (exit_price - price if position["side"] == "long" else price - exit_price)) * position["qty"],
+                        )
+                    )
+                    position = None
+
             unrealized = 0.0
             if position is not None:
                 if position["side"] == "long":

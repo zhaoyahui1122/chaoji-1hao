@@ -53,7 +53,7 @@ type Props = {
     config: {
       symbol: 'BTC_USDT' | 'ETH_USDT'
       symbols?: Array<'BTC_USDT' | 'ETH_USDT'> | null
-      strategy_type?: 'classic' | 'turtle' | 'ict' | 'macd_trend'
+      strategy_type?: 'classic' | 'turtle' | 'ict' | 'ifvg' | 'macd_trend'
       leverage: number
       stop_loss_pct: number
       take_profit_pct: number
@@ -124,9 +124,10 @@ export default function PaperTradePanel({ onOpen, onMark, onClose, onReset, onRu
     () => strategyPresets.find((item) => String(item.slotId) === selectedStrategySlot) || null,
     [selectedStrategySlot, strategyPresets],
   )
-  const formatStrategyTypeLabel = (strategyType?: 'classic' | 'turtle' | 'ict' | 'macd_trend') => {
+  const formatStrategyTypeLabel = (strategyType?: 'classic' | 'turtle' | 'ict' | 'ifvg' | 'macd_trend') => {
     if (strategyType === 'turtle') return '海龟策略'
     if (strategyType === 'ict') return 'ICT 三周期'
+    if (strategyType === 'ifvg') return 'IFVG策略'
     if (strategyType === 'macd_trend') return 'MACD趋势'
     return '经典策略'
   }

@@ -26,6 +26,7 @@ from app.strategy.boll_rsi_ma import (
 )
 from app.strategy.turtle import prepare_signals as turtle_prepare_signals
 from app.strategy.ict import generate_signal as ict_generate_signal
+from app.strategy.ifvg import generate_signal as ifvg_generate_signal
 from app.strategy.macd_trend import (
     compute_indicators as macd_compute_indicators,
     prepare_signals as macd_prepare_signals,
@@ -140,6 +141,11 @@ def _run_macd_signal(config: dict[str, Any], df, last_row) -> tuple[str | None, 
         extra["stop_loss_price"] = best_price * (1 + trailing_pct)
 
     return signal, extra
+
+
+def _run_ifvg_signal(config: dict[str, Any], df, last_row) -> tuple[str | None, dict[str, Any] | None]:
+    """Run IFVG strategy and return (signal, extra_meta)."""
+    return ifvg_generate_signal(df, config)
 
 
 def _compute_trailing_stop(
@@ -650,6 +656,8 @@ def _run_single_symbol_cycle(
             signal, extra_meta = _run_turtle_signal(config, df, last_row)
         elif strategy_type == "macd_trend":
             signal, extra_meta = _run_macd_signal(config, df, last_row)
+        elif strategy_type == "ifvg":
+            signal, extra_meta = _run_ifvg_signal(config, df, last_row)
         else:
             signal, extra_meta = _run_classic_signal(config, df, last_row)
 
@@ -804,7 +812,7 @@ def _run_single_symbol_cycle(
             )
             sizing["stop_loss_price"] = sl_price
             sizing["take_profit_price"] = tp_price
-        elif strategy_type == "ict" and extra_meta and extra_meta.get("stop_loss_price"):
+        elif strategy_type in ("ict", "ifvg") and extra_meta and extra_meta.get("stop_loss_price"):
             sl_price = extra_meta["stop_loss_price"]
             tp_price = extra_meta["take_profit_price"]
             sizing = build_risk_sized_order(
@@ -901,6 +909,7 @@ def _run_single_symbol_cycle(
                 "take_profit_pct": take_profit_pct, "take_profit_price": sizing["take_profit_price"],
                 **({"atr": extra_meta.get("atr"), "turtle_signal": extra_meta.get("turtle_signal")} if extra_meta and strategy_type == "turtle" else {}),
                 **({"ict_signal": extra_meta.get("ict_signal"), "trend_4h": extra_meta.get("trend_4h"), "fvg_top": extra_meta.get("fvg_top"), "fvg_bottom": extra_meta.get("fvg_bottom")} if extra_meta and strategy_type == "ict" else {}),
+                **({"ifvg_signal": extra_meta.get("ifvg_signal"), "ifvg_bias": extra_meta.get("ifvg_bias"), "ifvg_top": extra_meta.get("ifvg_top"), "ifvg_bottom": extra_meta.get("ifvg_bottom"), "ifvg_session": extra_meta.get("ifvg_session")} if extra_meta and strategy_type == "ifvg" else {}),
             },
             fee_rate=fee_rate, slippage_rate=slippage_rate,
             qty=explicit_qty if explicit_qty > 0 else None,

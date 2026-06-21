@@ -48,6 +48,13 @@ OPTIMIZED_TURTLE_PRESET = {
     "ict_min_fvg_width_pct": 0.0,
     "ict_cooldown_bars": 4,
     "ict_require_trend": True,
+    "ifvg_risk_reward": 1.5,
+    "ifvg_fvg_lookback": 80,
+    "ifvg_min_fvg_width_pct": 0.0002,
+    "ifvg_bias_ema_period": 20,
+    "ifvg_session": "new_york_am",
+    "ifvg_require_bias": True,
+    "ifvg_one_shot_per_session": True,
     "turtle_adx_period": 14,
     "turtle_adx_threshold": 35.0,
     "turtle_force_mode": "turtle",
@@ -101,6 +108,13 @@ DEFAULT_SLOTS = [
             "ict_min_fvg_width_pct": 0.0,
             "ict_cooldown_bars": 4,
             "ict_require_trend": True,
+            "ifvg_risk_reward": 1.5,
+            "ifvg_fvg_lookback": 80,
+            "ifvg_min_fvg_width_pct": 0.0002,
+            "ifvg_bias_ema_period": 20,
+            "ifvg_session": "new_york_am",
+            "ifvg_require_bias": True,
+            "ifvg_one_shot_per_session": True,
             "stop_loss_pct": 0.01,
             "take_profit_pct": 0.015,
             "risk_per_trade_pct": 0.01,
@@ -152,6 +166,13 @@ DEFAULT_SLOTS = [
             "ict_min_fvg_width_pct": 0.0,
             "ict_cooldown_bars": 4,
             "ict_require_trend": True,
+            "ifvg_risk_reward": 1.5,
+            "ifvg_fvg_lookback": 80,
+            "ifvg_min_fvg_width_pct": 0.0002,
+            "ifvg_bias_ema_period": 20,
+            "ifvg_session": "new_york_am",
+            "ifvg_require_bias": True,
+            "ifvg_one_shot_per_session": True,
             "stop_loss_pct": 0.02,
             "take_profit_pct": 0.04,
             "risk_per_trade_pct": 0.01,
@@ -160,6 +181,64 @@ DEFAULT_SLOTS = [
             "enabled": True,
         },
         "updatedAt": "2026-05-19T00:00:00Z",
+        "locked": False,
+    },
+    {
+        "slotId": 3,
+        "name": "IFVG策略",
+        "config": {
+            "symbol": "BTC_USDT",
+            "timeframe": "15m",
+            "strategy_type": "ifvg",
+            "leverage": 20,
+            "use_boll": False,
+            "boll_period": 20,
+            "boll_std": 2.0,
+            "use_rsi": False,
+            "rsi_period": 14,
+            "rsi_oversold": 30,
+            "rsi_overbought": 70,
+            "use_ma": False,
+            "ma_short": 9,
+            "ma_long": 21,
+            "use_macd": False,
+            "macd_fast": 12,
+            "macd_slow": 26,
+            "macd_signal": 9,
+            "use_kdj": False,
+            "kdj_period": 9,
+            "kdj_signal_period": 3,
+            "kdj_overbought": 80,
+            "kdj_oversold": 20,
+            "min_signal_score": 3,
+            "churn_guard_enabled": False,
+            "classic_trend_filter_enabled": False,
+            "classic_cooldown_bars": 0,
+            "turtle_entry_period": 20,
+            "turtle_exit_period": 10,
+            "turtle_atr_period": 14,
+            "turtle_atr_filter": 0.0,
+            "ict_bos_lookback": 10,
+            "ict_risk_reward": 2.5,
+            "ict_lookback_eng_bars": 80,
+            "ict_min_fvg_width_pct": 0.0,
+            "ict_cooldown_bars": 4,
+            "ict_require_trend": True,
+            "ifvg_risk_reward": 1.5,
+            "ifvg_fvg_lookback": 80,
+            "ifvg_min_fvg_width_pct": 0.0002,
+            "ifvg_bias_ema_period": 20,
+            "ifvg_session": "new_york_am",
+            "ifvg_require_bias": True,
+            "ifvg_one_shot_per_session": True,
+            "stop_loss_pct": 0.01,
+            "take_profit_pct": 0.015,
+            "risk_per_trade_pct": 0.01,
+            "fee_rate": 0.00015,
+            "slippage_rate": 0.0001,
+            "enabled": True,
+        },
+        "updatedAt": "2026-06-21T00:00:00Z",
         "locked": False,
     },
 ]
@@ -172,6 +251,23 @@ def _load_json_fallback(default: dict[str, Any]) -> dict[str, Any]:
         return json.loads(STRATEGY_STATE_PATH.read_text(encoding="utf-8"))
     except Exception:
         return default
+
+
+def _with_required_default_slots(slots: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    existing_types = {str(slot.get("config", {}).get("strategy_type", "")) for slot in slots}
+    next_slots = list(slots)
+    changed = False
+    for default_slot in DEFAULT_SLOTS:
+        strategy_type = str(default_slot.get("config", {}).get("strategy_type", ""))
+        if strategy_type and strategy_type not in existing_types:
+            next_id = max((int(slot.get("slotId", 0) or 0) for slot in next_slots), default=0) + 1
+            next_slot = {**default_slot, "slotId": next_id}
+            next_slots.append(next_slot)
+            existing_types.add(strategy_type)
+            changed = True
+    if changed:
+        save_strategy_slots(next_slots)
+    return next_slots
 
 
 def load_strategy_config(default: dict[str, Any]) -> dict[str, Any]:
@@ -194,13 +290,13 @@ def load_strategy_slots() -> list[dict[str, Any]]:
     """加载策略槽列表，首次使用时初始化默认槽（含锁定的海龟优化策略）"""
     data = load_kv("strategy", "slots", None)
     if data is not None:
-        return data
+        return _with_required_default_slots(data)
 
     if STRATEGY_SLOTS_PATH.exists():
         try:
             slots = json.loads(STRATEGY_SLOTS_PATH.read_text(encoding="utf-8"))
             save_kv("strategy", "slots", slots)
-            return slots
+            return _with_required_default_slots(slots)
         except Exception:
             pass
 
@@ -264,6 +360,13 @@ def add_strategy_slot(name: str | None = None) -> dict[str, Any]:
             "ict_min_fvg_width_pct": 0.0,
             "ict_cooldown_bars": 4,
             "ict_require_trend": True,
+            "ifvg_risk_reward": 1.5,
+            "ifvg_fvg_lookback": 80,
+            "ifvg_min_fvg_width_pct": 0.0002,
+            "ifvg_bias_ema_period": 20,
+            "ifvg_session": "new_york_am",
+            "ifvg_require_bias": True,
+            "ifvg_one_shot_per_session": True,
             "stop_loss_pct": 0.02,
             "take_profit_pct": 0.04,
             "risk_per_trade_pct": 0.01,

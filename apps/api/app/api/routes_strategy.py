@@ -27,7 +27,7 @@ class StrategyConfig(BaseModel):
     symbol: Symbol = "BTC_USDT"
     symbols: list[Symbol] | None = None
     timeframe: Timeframe = "15m"
-    strategy_type: Literal["classic", "turtle", "ict", "macd_trend"] = "classic"
+    strategy_type: Literal["classic", "turtle", "ict", "ifvg", "macd_trend"] = "classic"
     leverage: int = Field(default=5, ge=1, le=150)
     use_boll: bool = True
     boll_period: int = Field(default=20, ge=5, le=200)
@@ -62,6 +62,13 @@ class StrategyConfig(BaseModel):
     ict_min_fvg_width_pct: float = Field(default=0.0, ge=0.0, le=0.01)
     ict_cooldown_bars: int = Field(default=4, ge=0, le=100)
     ict_require_trend: bool = Field(default=True)
+    ifvg_risk_reward: float = Field(default=1.5, ge=1.0, le=2.0)
+    ifvg_fvg_lookback: int = Field(default=80, ge=10, le=300)
+    ifvg_min_fvg_width_pct: float = Field(default=0.0002, ge=0.0, le=0.01)
+    ifvg_bias_ema_period: int = Field(default=20, ge=5, le=200)
+    ifvg_session: Literal["any", "asia", "london", "new_york_am"] = "new_york_am"
+    ifvg_require_bias: bool = Field(default=True)
+    ifvg_one_shot_per_session: bool = Field(default=True)
     macd_trend_enabled: bool = True
     macd_divergence_enabled: bool = True
     macd_signal_expiry: int = Field(default=20, ge=3, le=100)

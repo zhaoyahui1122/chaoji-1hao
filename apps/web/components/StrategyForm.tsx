@@ -20,7 +20,7 @@ type Props = {
   strategySlots?: Array<{
     slotId: number
     name?: string
-    config: Pick<StrategyConfig, 'symbol' | 'timeframe' | 'strategy_type' | 'leverage' | 'stop_loss_pct' | 'take_profit_pct' | 'risk_per_trade_pct' | 'turtle_entry_period' | 'turtle_exit_period'> & Partial<Pick<StrategyConfig, 'symbols' | 'classic_trend_filter_enabled' | 'classic_cooldown_bars' | 'turtle_atr_period' | 'turtle_atr_filter' | 'turtle_adx_period' | 'turtle_adx_threshold' | 'turtle_force_mode' | 'ict_bos_lookback' | 'ict_risk_reward' | 'fee_rate' | 'slippage_rate'>>
+    config: Pick<StrategyConfig, 'symbol' | 'timeframe' | 'strategy_type' | 'leverage' | 'stop_loss_pct' | 'take_profit_pct' | 'risk_per_trade_pct' | 'turtle_entry_period' | 'turtle_exit_period'> & Partial<Pick<StrategyConfig, 'symbols' | 'classic_trend_filter_enabled' | 'classic_cooldown_bars' | 'turtle_atr_period' | 'turtle_atr_filter' | 'turtle_adx_period' | 'turtle_adx_threshold' | 'turtle_force_mode' | 'ict_bos_lookback' | 'ict_risk_reward' | 'ifvg_risk_reward' | 'ifvg_session' | 'ifvg_fvg_lookback' | 'fee_rate' | 'slippage_rate'>>
     locked?: boolean
   }>
   onStrategySlotChange?: (slotId: number) => void
@@ -141,7 +141,7 @@ export default function StrategyForm({ initial, onSave, onRunBacktest, onInvalid
     } catch { /* ignore */ }
   }
 
-  const strategyTypeLabel = form.strategy_type === 'turtle' ? '海龟策略' : form.strategy_type === 'ict' ? 'ICT三周期策略' : form.strategy_type === 'macd_trend' ? 'MACD趋势策略' : '经典策略'
+  const strategyTypeLabel = form.strategy_type === 'turtle' ? '海龟策略' : form.strategy_type === 'ict' ? 'ICT三周期策略' : form.strategy_type === 'ifvg' ? 'IFVG策略' : form.strategy_type === 'macd_trend' ? 'MACD趋势策略' : '经典策略'
 
   const signalSummary = useMemo(() => {
     if (form.strategy_type === 'turtle') {
@@ -150,6 +150,9 @@ export default function StrategyForm({ initial, onSave, onRunBacktest, onInvalid
     }
     if (form.strategy_type === 'ict') {
       return `ICT(4h BOS ${form.ict_bos_lookback ?? 20} / 1h FVG / 15m 吞没, 1:${form.ict_risk_reward ?? 2.5})`
+    }
+    if (form.strategy_type === 'ifvg') {
+      return `IFVG(HTF bias + FVG拒绝, ${form.ifvg_session ?? 'new_york_am'}, 1:${form.ifvg_risk_reward ?? 1.5})`
     }
     if (form.strategy_type === 'macd_trend') {
       const parts: string[] = []
@@ -340,7 +343,7 @@ export default function StrategyForm({ initial, onSave, onRunBacktest, onInvalid
                       </div>
                     </div>
                     <div className={`mt-2 text-xs leading-relaxed ${active ? 'text-white/78' : 'text-text-secondary'}`}>
-                      {(slot.config.symbols ?? [slot.config.symbol]).join(' / ')} · {slot.config.timeframe} · {slot.config.strategy_type === 'turtle' ? '海龟' : slot.config.strategy_type === 'ict' ? 'ICT三周期' : slot.config.strategy_type === 'macd_trend' ? 'MACD趋势' : '经典'}
+                      {(slot.config.symbols ?? [slot.config.symbol]).join(' / ')} · {slot.config.timeframe} · {slot.config.strategy_type === 'turtle' ? '海龟' : slot.config.strategy_type === 'ict' ? 'ICT三周期' : slot.config.strategy_type === 'ifvg' ? 'IFVG' : slot.config.strategy_type === 'macd_trend' ? 'MACD趋势' : '经典'}
                     </div>
                     <div className={`mt-0.5 text-[11px] leading-snug ${active ? 'text-white/62' : 'text-text-muted'}`}>
                       实际杠杆以交易工作区选择为准
@@ -361,6 +364,11 @@ export default function StrategyForm({ initial, onSave, onRunBacktest, onInvalid
                     {slot.config.strategy_type === 'ict' ? (
                       <div className={`mt-1 text-xs leading-relaxed ${active ? 'text-white/72' : 'text-text-muted'}`}>
                         BOS {slot.config.ict_bos_lookback ?? 20} ｜ RR 1:{slot.config.ict_risk_reward ?? 2.5} ｜ 4h BOS + 1h FVG + 15m 吞没
+                      </div>
+                    ) : null}
+                    {slot.config.strategy_type === 'ifvg' ? (
+                      <div className={`mt-1 text-xs leading-relaxed ${active ? 'text-white/72' : 'text-text-muted'}`}>
+                        RR 1:{slot.config.ifvg_risk_reward ?? 1.5} ｜ {slot.config.ifvg_session ?? 'new_york_am'} ｜ HTF bias + FVG拒绝
                       </div>
                     ) : null}
                     {locked ? (
@@ -476,6 +484,13 @@ export default function StrategyForm({ initial, onSave, onRunBacktest, onInvalid
                 <ValueMetric label="BOS 回看" valueText={String(form.ict_bos_lookback ?? 20)} />
                 <ValueMetric label="风险回报比" valueText={`1:${form.ict_risk_reward ?? 2.5}`} />
               </>
+            ) : form.strategy_type === 'ifvg' ? (
+              <>
+                <ValueMetric label="胜率参考" valueText="约70%" />
+                <ValueMetric label="盈亏比" valueText={`1:${form.ifvg_risk_reward ?? 1.5}`} />
+                <ValueMetric label="交易时段" valueText={form.ifvg_session ?? 'new_york_am'} />
+                <ValueMetric label="一发子弹" valueText={(form.ifvg_one_shot_per_session ?? true) ? '开启' : '关闭'} />
+              </>
             ) : form.strategy_type === 'macd_trend' ? (
               <>
                 <ValueMetric label="信号超时" valueText={`${form.macd_signal_expiry ?? 20} 根`} />
@@ -498,10 +513,12 @@ export default function StrategyForm({ initial, onSave, onRunBacktest, onInvalid
 
 
           {priceReference && priceReference.symbol === form.symbol ? (
-            form.strategy_type === 'ict' ? (
+            form.strategy_type === 'ict' || form.strategy_type === 'ifvg' ? (
               <div className="grid gap-2.5 rounded-[18px] border border-accent-cyan/18 bg-gradient-to-b from-[#111924]/98 to-[#0c1118] p-3.5 shadow-lg">
                 <div className="text-[13px] leading-relaxed text-accent-green">
-                  ICT 策略的止损止盈由 1h FVG 边界和 1:{form.ict_risk_reward ?? 2.5} 风险回报比决定，执行时由后端实时计算。
+                  {form.strategy_type === 'ifvg'
+                    ? `IFVG 策略的止损止盈由 FVG 拒绝关键位和 1:${form.ifvg_risk_reward ?? 1.5} 风险回报比决定，执行时由后端实时计算。`
+                    : `ICT 策略的止损止盈由 1h FVG 边界和 1:${form.ict_risk_reward ?? 2.5} 风险回报比决定，执行时由后端实时计算。`}
                 </div>
               </div>
             ) : (
@@ -561,6 +578,42 @@ export default function StrategyForm({ initial, onSave, onRunBacktest, onInvalid
                 <div className="grid grid-cols-[repeat(auto-fit,minmax(180px,1fr))] gap-3">
                   <FieldRow label="BOS 回看周期" type="number" value={form.ict_bos_lookback ?? 20} onChange={(v) => update('ict_bos_lookback' as any, Number(v))} disabled={isLocked} />
                   <FieldRow label="风险回报比" type="number" step="0.1" value={form.ict_risk_reward ?? 2.5} onChange={(v) => update('ict_risk_reward' as any, Number(v))} disabled={isLocked} />
+                </div>
+              </div>
+            ) : form.strategy_type === 'ifvg' ? (
+              <div className="grid gap-3 rounded-[18px] border border-white/8 bg-bg-card p-3.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
+                <div className="grid gap-1">
+                  <strong className="text-sm text-text-primary">IFVG策略参数</strong>
+                  <div className="text-xs text-text-muted">源于 ICT：高时间级别偏见 + 关键 FVG 拒绝 + 时间段对齐；默认只做纽约上午一段。</div>
+                  <div className="rounded-[10px] border border-accent-green/12 bg-accent-green/8 px-2.5 py-2 text-xs leading-relaxed text-accent-green">
+                    清单：HTF bias 清晰、价格从高时间级别关键位拒绝、时段对齐、止损保护在关键位外侧；Judas Swing 只作为加分项，不作为硬触发。
+                  </div>
+                </div>
+                <div className="grid grid-cols-[repeat(auto-fit,minmax(180px,1fr))] gap-3">
+                  <FieldRow label="风险回报比" type="number" step="0.1" value={form.ifvg_risk_reward ?? 1.5} onChange={(v) => update('ifvg_risk_reward' as any, Number(v))} disabled={isLocked} />
+                  <FieldRow label="FVG回看K线" type="number" value={form.ifvg_fvg_lookback ?? 80} onChange={(v) => update('ifvg_fvg_lookback' as any, Number(v))} disabled={isLocked} />
+                  <FieldRow label="最小FVG宽度" type="number" step="0.0001" value={form.ifvg_min_fvg_width_pct ?? 0.0002} onChange={(v) => update('ifvg_min_fvg_width_pct' as any, Number(v))} disabled={isLocked} />
+                  <FieldRow label="Bias EMA周期" type="number" value={form.ifvg_bias_ema_period ?? 20} onChange={(v) => update('ifvg_bias_ema_period' as any, Number(v))} disabled={isLocked} />
+                  <SelectRow
+                    label="交易时段"
+                    value={form.ifvg_session ?? 'new_york_am'}
+                    onChange={(value) => update('ifvg_session' as any, value)}
+                    options={[
+                      { value: 'new_york_am', label: '纽约上午' },
+                      { value: 'london', label: '伦敦时段' },
+                      { value: 'asia', label: '亚洲时段' },
+                      { value: 'any', label: '不限时段' },
+                    ]}
+                    disabled={isLocked}
+                  />
+                </div>
+                <div className="grid grid-cols-[repeat(auto-fit,minmax(220px,1fr))] gap-3">
+                  <IndicatorToggleCard title="必须有高周期偏见" checked={form.ifvg_require_bias ?? true} onToggle={(checked) => update('ifvg_require_bias' as any, checked)} hint="开启后，逆着高周期 EMA 叙事的 FVG 拒绝不会触发。">
+                    <div className="text-xs leading-relaxed text-text-secondary">用于落实 high time frame bias，减少无叙事的随机 FVG 交易。</div>
+                  </IndicatorToggleCard>
+                  <IndicatorToggleCard title="一发子弹" checked={form.ifvg_one_shot_per_session ?? true} onToggle={(checked) => update('ifvg_one_shot_per_session' as any, checked)} hint="一天只做一个时间段，一个交易时段内只保留一笔高质量机会。">
+                    <div className="text-xs leading-relaxed text-text-secondary">当前版本先记录配置，实际去重会在多周期会话状态升级时接入。</div>
+                  </IndicatorToggleCard>
                 </div>
               </div>
             ) : form.strategy_type === 'macd_trend' ? (

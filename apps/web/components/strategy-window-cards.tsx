@@ -188,7 +188,7 @@ export function RunnerControlCard({
               <div className="text-xs uppercase tracking-[0.08em] text-text-muted">当前主策略</div>
               <div className="mt-1.5 text-xl font-black tracking-tight text-text-primary">{activePreset?.name || `策略 ${strategySlotId}`}</div>
               <div className="mt-2 text-[13px] text-slate-300">
-                {activeStrategy.symbol} · {activeStrategy.timeframe} · {activeStrategy.leverage}x · {activeStrategy.strategy_type === 'turtle' ? '海龟策略' : '经典策略'}
+                {activeStrategy.symbol} · {activeStrategy.timeframe} · {activeStrategy.leverage}x · {activeStrategy.strategy_type === 'turtle' ? '海龟策略' : activeStrategy.strategy_type === 'ict' ? 'ICT三周期策略' : activeStrategy.strategy_type === 'ifvg' ? 'IFVG策略' : activeStrategy.strategy_type === 'macd_trend' ? 'MACD趋势策略' : '经典策略'}
               </div>
             </div>
             <div className="p-4 rounded-[22px] bg-gradient-to-b from-[rgba(17,20,27,0.98)] to-[rgba(11,13,18,0.98)] border border-border text-text-primary shadow-[0_22px_48px_rgba(0,0,0,0.22)]">
@@ -318,7 +318,7 @@ export function RunnerControlCard({
             <div className="mt-4 p-3.5 rounded-[18px] bg-gradient-to-b from-[rgba(18,22,29,0.96)] to-[rgba(12,15,20,0.98)] border border-border text-text-secondary grid gap-2 text-[13px] leading-[1.6]">
               <div className="flex flex-wrap gap-2">
                 <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-violet-500/12 text-violet-600">
-                  {activeStrategy.strategy_type === 'turtle' ? '当前执行：海龟策略' : activeStrategy.strategy_type === 'ict' ? '当前执行：ICT三周期策略' : '当前执行：经典策略'}
+                  {activeStrategy.strategy_type === 'turtle' ? '当前执行：海龟策略' : activeStrategy.strategy_type === 'ict' ? '当前执行：ICT三周期策略' : activeStrategy.strategy_type === 'ifvg' ? '当前执行：IFVG策略' : activeStrategy.strategy_type === 'macd_trend' ? '当前执行：MACD趋势策略' : '当前执行：经典策略'}
                 </span>
                 <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-teal-500/12 text-teal-700">
                   {activeStrategy.symbol} · {activeStrategy.timeframe} · {activeStrategy.leverage}x
@@ -330,6 +330,10 @@ export function RunnerControlCard({
                 ) : activeStrategy.strategy_type === 'ict' ? (
                   <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-700/10 text-emerald-800">
                     BOS {activeStrategy.ict_bos_lookback ?? 20} / RR 1:{activeStrategy.ict_risk_reward ?? 2.5}
+                  </span>
+                ) : activeStrategy.strategy_type === 'ifvg' ? (
+                  <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-700/10 text-emerald-800">
+                    IFVG RR 1:{activeStrategy.ifvg_risk_reward ?? 1.5} / {activeStrategy.ifvg_session ?? 'new_york_am'}
                   </span>
                 ) : (
                   <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-amber-600/14 text-amber-700">
@@ -496,7 +500,7 @@ export function BacktestSummaryCard({ backtest }: { backtest: BacktestResult | n
               <div className="grid gap-2.5">
                 <div className="flex flex-wrap gap-2">
                   <Badge variant="secondary" className="bg-white/12 text-white">
-                    {backtest.input.strategy_type === 'turtle' ? '海龟策略' : '经典策略'}
+                    {backtest.input.strategy_type === 'turtle' ? '海龟策略' : backtest.input.strategy_type === 'ict' ? 'ICT三周期策略' : backtest.input.strategy_type === 'ifvg' ? 'IFVG策略' : backtest.input.strategy_type === 'macd_trend' ? 'MACD趋势策略' : '经典策略'}
                   </Badge>
                   <Badge variant="secondary" className="bg-teal-400/12 text-teal-100">
                     {backtest.input.symbol || '-'} · {backtest.input.timeframe || '-'}

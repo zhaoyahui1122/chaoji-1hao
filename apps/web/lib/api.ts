@@ -159,7 +159,7 @@ export type StrategySavePayload = StrategyConfig
 export type BacktestRequestPayload = {
   symbol: Symbol
   timeframe: Timeframe
-  strategy_type: 'classic' | 'turtle' | 'ict' | 'macd_trend'
+  strategy_type: 'classic' | 'turtle' | 'ict' | 'ifvg' | 'macd_trend'
   data_source: DataSource
   leverage: number
   initial_balance: number
@@ -204,6 +204,13 @@ export type BacktestRequestPayload = {
   ict_min_fvg_width_pct?: number
   ict_cooldown_bars?: number
   ict_require_trend?: boolean
+  ifvg_risk_reward?: number
+  ifvg_fvg_lookback?: number
+  ifvg_min_fvg_width_pct?: number
+  ifvg_bias_ema_period?: number
+  ifvg_session?: 'any' | 'asia' | 'london' | 'new_york_am'
+  ifvg_require_bias?: boolean
+  ifvg_one_shot_per_session?: boolean
   stop_loss_pct: number
   take_profit_pct: number
   risk_per_trade_pct: number
@@ -213,7 +220,7 @@ export type RunnerRequestPayload = {
   symbol: Symbol
   symbols?: Symbol[] | null
   timeframe: Timeframe
-  strategy_type: 'classic' | 'turtle' | 'ict' | 'macd_trend'
+  strategy_type: 'classic' | 'turtle' | 'ict' | 'ifvg' | 'macd_trend'
   data_source: DataSource
   trade_mode?: 'paper' | 'live'
   direction_mode?: 'auto' | 'long_only' | 'short_only'
@@ -249,6 +256,13 @@ export type RunnerRequestPayload = {
   turtle_adx_period?: number
   turtle_adx_threshold?: number
   turtle_force_mode?: string | null
+  ifvg_risk_reward?: number
+  ifvg_fvg_lookback?: number
+  ifvg_min_fvg_width_pct?: number
+  ifvg_bias_ema_period?: number
+  ifvg_session?: 'any' | 'asia' | 'london' | 'new_york_am'
+  ifvg_require_bias?: boolean
+  ifvg_one_shot_per_session?: boolean
   stop_loss_pct: number
   take_profit_pct: number
   risk_per_trade_pct: number
